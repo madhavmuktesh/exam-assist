@@ -7,7 +7,7 @@ import {
   generateQuestions,
   createExamFromQuestions,
   ExamConfig,
-} from "@/features/exam/api.ts";
+} from "@/features/exams/api";
 import { useRouter } from "next/navigation";
 
 export default function CreateExamPage() {

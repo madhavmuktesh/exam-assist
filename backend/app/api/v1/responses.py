@@ -1,3 +1,5 @@
+# backend/app/api/v1/responses.py
+
 from datetime import datetime, timezone
 
 from bson import ObjectId
@@ -32,6 +34,16 @@ def serialize_response_item(item: dict) -> dict:
 
 
 def serialize_result(item: dict) -> dict:
+    """
+    This is what the frontend Result page consumes.
+    answer_breakdown should be a list of per-question dicts including:
+    - question_id, question_text, question_type
+    - options (for objective questions)
+    - correct_option_ids
+    - selected_option_ids / descriptive_answer
+    - correct_descriptive_answer (if you include it)
+    - is_correct
+    """
     return {
         "id": str(item["_id"]),
         "exam_id": str(item["exam_id"]),
@@ -51,6 +63,8 @@ def serialize_result(item: dict) -> dict:
         "percentage": item["percentage"],
         "status": item["status"],
         "review_required": item["review_required"],
+        # This is what the frontend will use to show
+        # question-by-question user answer vs correct answer.
         "answer_breakdown": item.get("answer_breakdown", []),
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -88,7 +102,11 @@ def submit_exam(
 
     questions = list(
         db.questions.find(
-            {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"]), "is_active": True}
+            {
+                "exam_id": str(exam["_id"]),
+                "user_id": str(current_user["_id"]),
+                "is_active": True,
+            }
         ).sort("question_order", 1)
     )
 
@@ -104,7 +122,7 @@ def submit_exam(
         {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
     )
 
-    stored_response_docs = []
+    stored_response_docs: list[dict] = []
 
     for answer in payload.answers:
         if not ObjectId.is_valid(answer.question_id):
@@ -143,7 +161,11 @@ def submit_exam(
 
     stored_responses = list(
         db.responses.find(
-            {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"]), "is_active": True}
+            {
+                "exam_id": str(exam["_id"]),
+                "user_id": str(current_user["_id"]),
+                "is_active": True,
+            }
         )
     )
     responses_map = {item["question_id"]: item for item in stored_responses}
@@ -172,7 +194,7 @@ def submit_exam(
         percentage=scoring["percentage"],
         status=scoring["status"],
         review_required=scoring["review_required"],
-        answer_breakdown=scoring["answer_breakdown"],
+        answer_breakdown=scoring["answer_breakdown"],  # <- keep as keyword arg
     )
 
     result_insert = db.results.insert_one(result_doc)
@@ -202,7 +224,11 @@ def list_exam_responses(
 
     responses = list(
         db.responses.find(
-            {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"]), "is_active": True}
+            {
+                "exam_id": str(exam["_id"]),
+                "user_id": str(current_user["_id"]),
+                "is_active": True,
+            }
         ).sort("created_at", 1)
     )
 
@@ -214,6 +240,11 @@ def get_exam_result(
     exam_id: str,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Returns:
+    - summary fields (total_questions, scores, etc.)
+    - answer_breakdown: per-question details for review
+    """
     db = get_database()
     exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 

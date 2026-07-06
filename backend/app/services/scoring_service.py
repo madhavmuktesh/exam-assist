@@ -16,10 +16,10 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
 
     max_marks = 0.0
     objective_score = 0.0
-    descriptive_score = 0.0
+    descriptive_score = 0.0  # reserved if you later auto-score descriptives
 
     review_required = False
-    answer_breakdown = []
+    answer_breakdown: list[dict] = []
 
     for question in questions:
         question_id = str(question["_id"])
@@ -31,10 +31,10 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
         question_type = question["question_type"]
         obtained_marks = 0.0
         is_attempted = False
-        is_correct = None
+        is_correct: bool | None = None
 
-        selected_option_ids = []
-        descriptive_answer = None
+        selected_option_ids: list[str] = []
+        descriptive_answer: str | None = None
 
         if response:
             selected_option_ids = response.get("selected_option_ids", [])
@@ -43,7 +43,9 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
         if question_type == "objective":
             objective_total += 1
 
-            correct_option_ids = normalize_option_ids(question.get("correct_option_ids", []))
+            correct_option_ids = normalize_option_ids(
+                question.get("correct_option_ids", [])
+            )
             submitted_option_ids = normalize_option_ids(selected_option_ids)
 
             if submitted_option_ids:
@@ -60,6 +62,9 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     objective_wrong += 1
                     is_correct = False
 
+            # include options in breakdown so frontend can render text + highlighting
+            options = question.get("options", [])
+
             answer_breakdown.append(
                 {
                     "question_id": question_id,
@@ -71,6 +76,7 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     "is_correct": is_correct,
                     "selected_option_ids": submitted_option_ids,
                     "correct_option_ids": correct_option_ids,
+                    "options": options,  # NEW: list of {id, text}
                     "descriptive_answer": None,
                     "correct_answer_text": None,
                     "explanation": question.get("explanation"),
@@ -94,11 +100,12 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     "question_type": question_type,
                     "question_text": question["question_text"],
                     "marks": marks,
-                    "obtained_marks": 0.0,
+                    "obtained_marks": 0.0,  # manual review later
                     "is_attempted": is_attempted,
                     "is_correct": None,
                     "selected_option_ids": [],
                     "correct_option_ids": [],
+                    "options": [],  # keep consistent structure
                     "descriptive_answer": descriptive_answer,
                     "correct_answer_text": question.get("correct_answer_text"),
                     "explanation": question.get("explanation"),

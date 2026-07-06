@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getExam, submitResponses } from "@/features/exam/api";
+import { getExam, submitResponses } from "@/features/exams/api";
 import { useRouter } from "next/navigation";
 
 export default function TakeExamPage({ params }: { params: { examId: string } }) {

@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getExamHistory } from "@/features/exam/api";
+import { getExamHistory } from "@/features/exams/api";
 
 interface HistoryItem {
   exam_id: string;

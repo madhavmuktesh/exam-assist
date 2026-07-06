@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode } from "react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useauth";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
