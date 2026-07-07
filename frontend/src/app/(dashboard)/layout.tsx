@@ -1,9 +1,8 @@
-// frontend/src/app/(dashboard)/layout.tsx
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ReactNode } from "react";
 import { useAuth } from "@/hooks/useauth";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
@@ -64,9 +63,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="flex-1">
-        {children}
-      </main>
+      <main className="flex-1">{children}</main>
     </div>
   );
 }

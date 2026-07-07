@@ -2,58 +2,55 @@
 "use client";
 
 import { useState } from "react";
-import {
-  uploadSourcePdf,
-  generateQuestions,
-  createExamFromQuestions,
-  ExamConfig,
-} from "@/features/exams/api";
 import { useRouter } from "next/navigation";
+import {
+  createExam,
+  Difficulty,
+  ExamCreatePayload,
+  SourceType,
+  TimerMode,
+} from "@/features/exams/api";
 
 export default function CreateExamPage() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
-  const [mode, setMode] = useState<"content" | "questions">("content");
-  const [config, setConfig] = useState<ExamConfig>({
-    title: "",
-    total_mcq: 20,
-    total_descriptive: 5,
-    duration_minutes: 60,
-    difficulty: "medium",
-  });
-  const [loading, setLoading] = useState(false);
+  const [sourceType, setSourceType] = useState<SourceType>("topic_pdf");
+  const [difficulty, setDifficulty] = useState<Difficulty>("medium");
+  const [objectiveCount, setObjectiveCount] = useState(20);
+  const [descriptiveCount, setDescriptiveCount] = useState(5);
+  const [optionsCount, setOptionsCount] = useState(4);
+  const [timerMode, setTimerMode] = useState<TimerMode>("single");
+  const [durationMinutes, setDurationMinutes] = useState<number | null>(60);
+  const [title, setTitle] = useState("");
+  const [instructions, setInstructions] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file) {
-      setError("Please upload a PDF file.");
-      return;
-    }
     setError(null);
     setLoading(true);
+
     try {
-      const { pipeline_id } = await uploadSourcePdf(file, mode);
-      const genRes = await generateQuestions(pipeline_id, config);
+      const payload: ExamCreatePayload = {
+        title,
+        source_type: sourceType,
+        input_mode: "pdf",
+        difficulty,
+        objective_count: objectiveCount,
+        descriptive_count: descriptiveCount,
+        options_count: optionsCount,
+        timer_mode: timerMode,
+        total_duration_minutes: durationMinutes,
+        section_timers: [], // you can add sections later
+        question_time_seconds: null,
+        pdf_filename: file ? file.name : null,
+        topic_name: null,
+        instructions: instructions || null,
+      };
 
-      let examId: string | undefined;
-
-      if ("exam_id" in genRes) {
-        examId = genRes.exam_id;
-      } else if ("questions" in genRes) {
-        const exam = await createExamFromQuestions({
-          title: config.title,
-          questions: genRes.questions,
-          duration_minutes: config.duration_minutes,
-        });
-        examId = exam.id ?? exam.exam_id;
-      }
-
-      if (examId) {
-        router.push(`/exams/${examId}`);
-      } else {
-        setError("Exam created but no exam ID returned.");
-      }
+      const exam = await createExam(payload);
+      router.push(`/exams/${exam.id}`);
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? "Failed to create exam.");
     } finally {
@@ -63,22 +60,45 @@ export default function CreateExamPage() {
 
   return (
     <div className="max-w-3xl mx-auto py-8">
-      <h1 className="text-2xl font-semibold mb-4">Create Exam from PDF</h1>
+      <h1 className="text-2xl font-semibold mb-4">Create Exam</h1>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Title */}
         <div>
           <label className="block text-sm font-medium mb-1">Exam title</label>
           <input
             type="text"
-            value={config.title}
-            onChange={(e) =>
-              setConfig((c) => ({ ...c, title: e.target.value }))
-            }
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
             className="w-full border rounded px-3 py-2"
             required
           />
         </div>
 
+        {/* Source type */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Source type</label>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                checked={sourceType === "topic_pdf"}
+                onChange={() => setSourceType("topic_pdf")}
+              />
+              <span>Topic / course PDF</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                checked={sourceType === "question_pdf"}
+                onChange={() => setSourceType("question_pdf")}
+              />
+              <span>Question-paper PDF</span>
+            </label>
+          </div>
+        </div>
+
+        {/* PDF file (meta only for now) */}
         <div>
           <label className="block text-sm font-medium mb-1">PDF file</label>
           <input
@@ -86,42 +106,18 @@ export default function CreateExamPage() {
             accept="application/pdf"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             className="w-full"
-            required
           />
         </div>
 
-        <div className="flex flex-wrap gap-4">
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              checked={mode === "content"}
-              onChange={() => setMode("content")}
-            />
-            <span>Topic / course PDF</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              checked={mode === "questions"}
-              onChange={() => setMode("questions")}
-            />
-            <span>Existing question-paper PDF</span>
-          </label>
-        </div>
-
+        {/* Counts and options */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm mb-1">MCQ count</label>
             <input
               type="number"
               min={0}
-              value={config.total_mcq}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  total_mcq: Number(e.target.value),
-                }))
-              }
+              value={objectiveCount}
+              onChange={(e) => setObjectiveCount(Number(e.target.value))}
               className="w-full border rounded px-3 py-2"
             />
           </div>
@@ -130,13 +126,18 @@ export default function CreateExamPage() {
             <input
               type="number"
               min={0}
-              value={config.total_descriptive}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  total_descriptive: Number(e.target.value),
-                }))
-              }
+              value={descriptiveCount}
+              onChange={(e) => setDescriptiveCount(Number(e.target.value))}
+              className="w-full border rounded px-3 py-2"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Options per question</label>
+            <input
+              type="number"
+              min={2}
+              value={optionsCount}
+              onChange={(e) => setOptionsCount(Number(e.target.value))}
               className="w-full border rounded px-3 py-2"
             />
           </div>
@@ -145,33 +146,54 @@ export default function CreateExamPage() {
             <input
               type="number"
               min={5}
-              value={config.duration_minutes}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  duration_minutes: Number(e.target.value),
-                }))
-              }
+              value={durationMinutes ?? 0}
+              onChange={(e) => setDurationMinutes(Number(e.target.value))}
               className="w-full border rounded px-3 py-2"
             />
           </div>
-          <div>
-            <label className="block text-sm mb-1">Difficulty</label>
-            <select
-              value={config.difficulty}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  difficulty: e.target.value as ExamConfig["difficulty"],
-                }))
-              }
-              className="w-full border rounded px-3 py-2"
-            >
-              <option value="easy">Easy</option>
-              <option value="medium">Medium</option>
-              <option value="hard">Hard</option>
-            </select>
-          </div>
+        </div>
+
+        {/* Difficulty */}
+        <div>
+          <label className="block text-sm mb-1">Difficulty</label>
+          <select
+            value={difficulty}
+            onChange={(e) =>
+              setDifficulty(e.target.value as Difficulty)
+            }
+            className="w-full border rounded px-3 py-2"
+          >
+            <option value="easy">Easy</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+
+        {/* Timer mode */}
+        <div>
+          <label className="block text-sm mb-1">Timer mode</label>
+          <select
+            value={timerMode}
+            onChange={(e) =>
+              setTimerMode(e.target.value as TimerMode)
+            }
+            className="w-full border rounded px-3 py-2"
+          >
+            <option value="single">Single exam timer</option>
+            <option value="per_question">Per question</option>
+            <option value="per_section">Per section</option>
+          </select>
+        </div>
+
+        {/* Instructions */}
+        <div>
+          <label className="block text-sm mb-1">Instructions (optional)</label>
+          <textarea
+            className="w-full border rounded px-3 py-2"
+            rows={3}
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+          />
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

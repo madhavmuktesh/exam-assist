@@ -1,11 +1,7 @@
-// frontend/src/app/(auth)/login/layout.tsx
-// or: frontend/src/app/login/layout.tsx
+// frontend/src/app/(auth)/layout.tsx
 import type { ReactNode } from "react";
 
-export default function LoginLayout({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      {children}
-    </div>
-  );
+export default function AuthLayout({ children }: { children: ReactNode }) {
+  // No <html> or <body> here. Just wrap within the existing body.
+  return <>{children}</>;
 }
