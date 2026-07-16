@@ -81,7 +81,7 @@ export default function CreateExamPage() {
       };
 
       const exam = await createExam(payload);
-      router.push(`/exams/${exam.id}/ready`);
+      router.push(`/exams/${exam.id}`);
     } catch (err: any) {
       let message = "Failed to create exam.";
       if (err?.response?.data) {
