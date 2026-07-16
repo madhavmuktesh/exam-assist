@@ -79,6 +79,47 @@ Source material:
 {text}
 """.strip()
 
+def build_extraction_prompt(
+    text: str,
+    options_count: int,
+    difficulty: str,
+) -> str:
+    return f"""
+You are an expert data extractor. I am providing you with the raw text of an uploaded question paper.
+Your task is to accurately EXTRACT the existing questions and their options from this text. 
+Do NOT generate or invent new questions. Only extract what is explicitly there.
+
+Return valid JSON only in this format:
+{{
+  "questions": [
+    {{
+      "question_type": "objective" or "descriptive",
+      "question_text": "string",
+      "question_order": 1,
+      "marks": 1,
+      "options": [{{"id": "A", "text": "..."}}],
+      "correct_option_ids": ["A"],
+      "correct_answer_text": null,
+      "explanation": "Extracted via AI fallback.",
+      "section_name": "Extracted",
+      "difficulty": "{difficulty}",
+      "source_chunk_ids": [],
+      "time_limit_seconds": 45
+    }}
+  ]
+}}
+
+Rules:
+- If a question has options, mark it as "objective". Extract up to {options_count} options.
+- If a question has no options, mark it as "descriptive".
+- If the text contains an answer key (e.g., "Ans.(C)", "Answer: A"), put that letter in `correct_option_ids`.
+- Maintain the original wording of the questions as closely as possible.
+- Do not include markdown fences. Return JSON only.
+
+Source material:
+{text}
+""".strip()
+
 
 def generate_questions_from_content(
     text: str,
@@ -129,6 +170,49 @@ def generate_questions_from_content(
 
     return [question.model_dump() for question in validated.questions]
 
+def extract_questions_with_llm(
+    text: str,
+    options_count: int,
+    difficulty: str,
+) -> list[dict]:
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY is not configured")
+
+    # Limit text size to avoid massive token costs, take first 5000 chars roughly
+    chunks = chunk_text(text, chunk_size=5000)
+    source_text = "\n\n".join(chunks[:6])
+
+    prompt = build_extraction_prompt(
+        text=source_text,
+        options_count=options_count,
+        difficulty=difficulty,
+    )
+
+    response = client.chat.completions.create(
+        model=settings.openai_model,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a precise data extraction tool. You return strict JSON only.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.1, # Low temperature because we want exact extraction, not creativity
+    )
+
+    raw_content = response.choices[0].message.content
+    parsed = json.loads(raw_content)
+
+    try:
+        validated = LLMGeneratedQuestionSet.model_validate(parsed)
+    except ValidationError as exc:
+        raise ValueError(f"LLM extraction validation failed: {exc}") from exc
+
+    return [question.model_dump() for question in validated.questions]
 
 def extract_existing_questions(
     text: str,
@@ -143,22 +227,22 @@ def extract_existing_questions(
     # Matches Q1., Q1, Question 1, 1., 1) etc.
     question_pattern = re.compile(r"^(?:Q(?:uestion)?\s*\d+|\d+)[\).:]?\s+(.+)", re.IGNORECASE)
     
-    # Matches A), (A), a., a) -> Changed to (.*) to handle options where text wraps to the next line
+    # Matches A), (A), a., a) and captures wrapped text
     option_pattern = re.compile(r"^[\(]?([A-Da-d])[\).]\s*(.*)", re.IGNORECASE)
+
+    # NEW: Matches Ans.(a), Ans(B), Answer: c, etc.
+    answer_pattern = re.compile(r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Da-d])[\)]?", re.IGNORECASE)
 
     for line in lines:
         q_match = question_pattern.match(line)
         o_match = option_pattern.match(line)
+        ans_match = answer_pattern.match(line)
 
-        # --- FIX 1: HANDLE NUMBERED LISTS INSIDE QUESTIONS ---
-        # If it looks like a question, BUT we are in the middle of a question 
-        # and haven't found any options yet, it might be a numbered list (like 1., 2., 3.).
+        # Handle numbered lists inside a question's text
         if q_match and current_question and len(current_question["options"]) == 0:
-            # If the line explicitly starts with 'Q' (e.g., Q81.), it's definitely a new question.
             if re.match(r"^Q(?:uestion)?\s*\d+", line, re.IGNORECASE):
-                pass # Let it be processed as a new question below
+                pass # Let it process as a new question
             else:
-                # It's a numbered list inside the current question. Append it to the question text.
                 current_question["question_text"] += "\n" + line
                 continue
 
@@ -173,7 +257,7 @@ def extract_existing_questions(
                 "question_order": question_order,
                 "marks": 1,
                 "options": [],
-                "correct_option_ids": [],
+                "correct_option_ids": [], # This is what we will populate below
                 "correct_answer_text": None,
                 "explanation": "Extracted from uploaded question PDF.",
                 "section_name": "Objective",
@@ -184,8 +268,16 @@ def extract_existing_questions(
             question_order += 1
             continue
 
-        # --- PROCESS OPTIONS & CONTINUATION TEXT ---
+        # --- PROCESS OPTIONS, ANSWERS & CONTINUATION TEXT ---
         if current_question:
+            
+            # --- NEW: Catch Answer Key ---
+            if ans_match:
+                correct_letter = ans_match.group(1).upper()
+                current_question["correct_option_ids"] = [correct_letter]
+                continue
+            
+            # Process Options
             if o_match:
                 if len(current_question["options"]) < options_count:
                     option_id = o_match.group(1).upper()
@@ -196,13 +288,10 @@ def extract_existing_questions(
                         }
                     )
             else:
-                # --- FIX 2: HANDLE MULTI-LINE TEXT ---
-                # If it's not a new question and not an option, append it.
+                # Append multiline text to either the question or the last option
                 if len(current_question["options"]) == 0:
-                    # Append to question text
                     current_question["question_text"] += "\n" + line
                 else:
-                    # Append to the LAST option (handles values pushed to the next line)
                     current_question["options"][-1]["text"] += " " + line
 
     if current_question:

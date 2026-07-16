@@ -2,7 +2,7 @@
 from typing import Literal
 
 from bson import ObjectId
-
+import random
 from app.core.database import get_database
 from app.models.question import question_document
 from app.services.pdf_service import (
@@ -12,6 +12,7 @@ from app.services.pdf_service import (
 from app.services.question_generation_service import (
     generate_questions_from_content,
     extract_existing_questions,
+    extract_questions_with_llm,
 )
 
 QuestionPreparationMode = Literal[
@@ -48,7 +49,7 @@ def prepare_questions_for_exam_from_pdf(
     if not text.strip():
         raise ValueError("No text could be extracted from the uploaded PDF")
 
-    # 2) Generate or extract questions
+# 2) Generate or extract questions
     if input_mode == "generate_from_content":
         raw_questions = generate_questions_from_content(
             text=text,
@@ -58,11 +59,21 @@ def prepare_questions_for_exam_from_pdf(
             difficulty=difficulty,
         )
     elif input_mode == "extract_existing_questions":
+        # Try Regex first (fast and free)
         raw_questions = extract_existing_questions(
             text=text,
             options_count=options_count,
             difficulty=difficulty,
         )
+        
+        # --- NEW: LLM Fallback ---
+        if not raw_questions:
+            print("⚠️ Regex extraction failed. Falling back to LLM extraction...")
+            raw_questions = extract_questions_with_llm(
+                text=text,
+                options_count=options_count,
+                difficulty=difficulty,
+            )
     else:
         raise ValueError(
             f"Unsupported input_mode: {input_mode}. "
@@ -100,6 +111,8 @@ def prepare_questions_for_exam_from_pdf(
         marks = q["marks"]
         options = q.get("options", [])
         correct_option_ids = q.get("correct_option_ids", [])
+        if options:
+            random.shuffle(options)
         correct_answer_text = q.get("correct_answer_text")
         explanation = q.get("explanation")
         section_name = q.get("section_name")
@@ -155,6 +168,7 @@ def prepare_questions_for_exam_from_text(
     if not text:
         raise ValueError("Source text is empty; cannot prepare questions")
 
+# 2) Generate or extract questions
     if input_mode == "generate_from_content":
         raw_questions = generate_questions_from_content(
             text=text,
@@ -164,11 +178,21 @@ def prepare_questions_for_exam_from_text(
             difficulty=difficulty,
         )
     elif input_mode == "extract_existing_questions":
+        # Try Regex first (fast and free)
         raw_questions = extract_existing_questions(
             text=text,
             options_count=options_count,
             difficulty=difficulty,
         )
+        
+        # --- NEW: LLM Fallback ---
+        if not raw_questions:
+            print("⚠️ Regex extraction failed. Falling back to LLM extraction...")
+            raw_questions = extract_questions_with_llm(
+                text=text,
+                options_count=options_count,
+                difficulty=difficulty,
+            )
     else:
         raise ValueError(
             f"Unsupported input_mode: {input_mode}. "
