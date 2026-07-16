@@ -36,13 +36,14 @@ def serialize_response_item(item: dict) -> dict:
 def serialize_result(item: dict) -> dict:
     """
     This is what the frontend Result page consumes.
-    answer_breakdown should be a list of per-question dicts including:
-    - question_id, question_text, question_type
-    - options (for objective questions)
-    - correct_option_ids
-    - selected_option_ids / descriptive_answer
-    - correct_descriptive_answer (if you include it)
-    - is_correct
+
+    Fields:
+    - summary: totals, scores, percentage, status, review_required
+    - answer_breakdown: list of per-question dicts including:
+      question_id, question_text, question_type, marks, obtained_marks,
+      is_attempted, is_correct, selected_option_ids, correct_option_ids,
+      options (if you include them), descriptive_answer, correct_answer_text,
+      explanation, review_required.
     """
     return {
         "id": str(item["_id"]),
@@ -63,8 +64,6 @@ def serialize_result(item: dict) -> dict:
         "percentage": item["percentage"],
         "status": item["status"],
         "review_required": item["review_required"],
-        # This is what the frontend will use to show
-        # question-by-question user answer vs correct answer.
         "answer_breakdown": item.get("answer_breakdown", []),
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -100,6 +99,7 @@ def submit_exam(
     db = get_database()
     exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 
+    # Load questions for this exam and user
     questions = list(
         db.questions.find(
             {
@@ -118,12 +118,14 @@ def submit_exam(
 
     question_map = {str(question["_id"]): question for question in questions}
 
+    # Remove any previous responses for this exam/user
     db.responses.delete_many(
         {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
     )
 
     stored_response_docs: list[dict] = []
 
+    # Validate and transform submitted answers into response_document
     for answer in payload.answers:
         if not ObjectId.is_valid(answer.question_id):
             raise HTTPException(
@@ -159,6 +161,7 @@ def submit_exam(
     if stored_response_docs:
         db.responses.insert_many(stored_response_docs)
 
+    # Reload stored responses (to ensure consistency with DB state)
     stored_responses = list(
         db.responses.find(
             {
@@ -170,12 +173,15 @@ def submit_exam(
     )
     responses_map = {item["question_id"]: item for item in stored_responses}
 
+    # Compute scoring, breakdown, etc.
     scoring = score_exam(questions, responses_map)
 
+    # Remove any previous result for this exam/user
     db.results.delete_many(
         {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
     )
 
+    # Build and insert the new result document
     result_doc = result_document(
         exam_id=str(exam["_id"]),
         user_id=str(current_user["_id"]),
@@ -194,11 +200,12 @@ def submit_exam(
         percentage=scoring["percentage"],
         status=scoring["status"],
         review_required=scoring["review_required"],
-        answer_breakdown=scoring["answer_breakdown"],  # <- keep as keyword arg
+        answer_breakdown=scoring["answer_breakdown"],
     )
 
     result_insert = db.results.insert_one(result_doc)
 
+    # Mark exam as submitted
     db.exams.update_one(
         {"_id": exam["_id"]},
         {

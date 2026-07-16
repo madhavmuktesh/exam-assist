@@ -3,23 +3,29 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import api from "@/lib/apiClient";
 import {
   createExam,
-  Difficulty,
   ExamCreatePayload,
-  SourceType,
+  Difficulty,
   TimerMode,
+  QuestionPreparationMode,
+  SourceType,
 } from "@/features/exams/api";
 
 export default function CreateExamPage() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
-  const [sourceType, setSourceType] = useState<SourceType>("topic_pdf");
+
+  const [sourceType, setSourceType] = useState<SourceType>("pdf");
+  const [inputMode, setInputMode] =
+    useState<QuestionPreparationMode>("generate_from_content");
+
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [objectiveCount, setObjectiveCount] = useState(20);
   const [descriptiveCount, setDescriptiveCount] = useState(5);
   const [optionsCount, setOptionsCount] = useState(4);
-  const [timerMode, setTimerMode] = useState<TimerMode>("single");
+  const [timerMode, setTimerMode] = useState<TimerMode>("full_exam");
   const [durationMinutes, setDurationMinutes] = useState<number | null>(60);
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -29,30 +35,67 @@ export default function CreateExamPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (sourceType === "pdf" && !file) {
+      setError("Please upload a PDF file for this exam.");
+      return;
+    }
+
     setLoading(true);
 
     try {
+      let pdfFilename: string | null = null;
+
+      // 1) Upload the PDF first if pdf-based
+      if (sourceType === "pdf" && file) {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const uploadRes = await api.post<{ pdf_filename: string }>(
+          "/files/upload-pdf",
+          formData,
+          {
+            headers: { "Content-Type": "multipart/form-data" },
+          },
+        );
+
+        pdfFilename = uploadRes.data.pdf_filename;
+      }
+
+      // 2) Now create exam referencing saved PDF name
       const payload: ExamCreatePayload = {
         title,
         source_type: sourceType,
-        input_mode: "pdf",
+        input_mode: inputMode,
         difficulty,
         objective_count: objectiveCount,
         descriptive_count: descriptiveCount,
         options_count: optionsCount,
         timer_mode: timerMode,
         total_duration_minutes: durationMinutes,
-        section_timers: [], // you can add sections later
+        section_timers: [],
         question_time_seconds: null,
-        pdf_filename: file ? file.name : null,
+        pdf_filename: pdfFilename, // now comes from backend
         topic_name: null,
         instructions: instructions || null,
       };
 
       const exam = await createExam(payload);
-      router.push(`/exams/${exam.id}`);
+      router.push(`/exams/${exam.id}/ready`);
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? "Failed to create exam.");
+      let message = "Failed to create exam.";
+      if (err?.response?.data) {
+        const data = err.response.data;
+        if (typeof data === "string") {
+          message = data;
+        } else if (typeof data?.detail === "string") {
+          message = data.detail;
+        } else if (Array.isArray(data?.detail) && data.detail.length > 0) {
+          message = data.detail[0]?.msg ?? message;
+        }
+      }
+      console.error("Create exam error:", err?.response?.data ?? err);
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -75,39 +118,45 @@ export default function CreateExamPage() {
           />
         </div>
 
-        {/* Source type */}
+        {/* Question preparation mode */}
         <div>
-          <label className="block text-sm font-medium mb-1">Source type</label>
+          <label className="block text-sm font-medium mb-1">
+            Question preparation
+          </label>
           <div className="flex gap-4">
             <label className="flex items-center gap-2">
               <input
                 type="radio"
-                checked={sourceType === "topic_pdf"}
-                onChange={() => setSourceType("topic_pdf")}
+                checked={inputMode === "generate_from_content"}
+                onChange={() => setInputMode("generate_from_content")}
               />
-              <span>Topic / course PDF</span>
+              <span>Generate from content (topic/course PDF)</span>
             </label>
             <label className="flex items-center gap-2">
               <input
                 type="radio"
-                checked={sourceType === "question_pdf"}
-                onChange={() => setSourceType("question_pdf")}
+                checked={inputMode === "extract_existing_questions"}
+                onChange={() => setInputMode("extract_existing_questions")}
               />
-              <span>Question-paper PDF</span>
+              <span>Extract existing questions (question-paper PDF)</span>
             </label>
           </div>
         </div>
 
-        {/* PDF file (meta only for now) */}
-        <div>
-          <label className="block text-sm font-medium mb-1">PDF file</label>
-          <input
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="w-full"
-          />
-        </div>
+        {/* PDF file */}
+        {sourceType === "pdf" && (
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              PDF file
+            </label>
+            <input
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="w-full"
+            />
+          </div>
+        )}
 
         {/* Counts and options */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -132,7 +181,9 @@ export default function CreateExamPage() {
             />
           </div>
           <div>
-            <label className="block text-sm mb-1">Options per question</label>
+            <label className="block text-sm mb-1">
+              Options per question
+            </label>
             <input
               type="number"
               min={2}
@@ -142,7 +193,9 @@ export default function CreateExamPage() {
             />
           </div>
           <div>
-            <label className="block text-sm mb-1">Duration (minutes)</label>
+            <label className="block text-sm mb-1">
+              Duration (minutes)
+            </label>
             <input
               type="number"
               min={5}
@@ -158,9 +211,7 @@ export default function CreateExamPage() {
           <label className="block text-sm mb-1">Difficulty</label>
           <select
             value={difficulty}
-            onChange={(e) =>
-              setDifficulty(e.target.value as Difficulty)
-            }
+            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
             className="w-full border rounded px-3 py-2"
           >
             <option value="easy">Easy</option>
@@ -174,20 +225,20 @@ export default function CreateExamPage() {
           <label className="block text-sm mb-1">Timer mode</label>
           <select
             value={timerMode}
-            onChange={(e) =>
-              setTimerMode(e.target.value as TimerMode)
-            }
+            onChange={(e) => setTimerMode(e.target.value as TimerMode)}
             className="w-full border rounded px-3 py-2"
           >
-            <option value="single">Single exam timer</option>
-            <option value="per_question">Per question</option>
+            <option value="full_exam">Single exam timer</option>
             <option value="per_section">Per section</option>
+            <option value="per_question">Per question</option>
           </select>
         </div>
 
         {/* Instructions */}
         <div>
-          <label className="block text-sm mb-1">Instructions (optional)</label>
+          <label className="block text-sm mb-1">
+            Instructions (optional)
+          </label>
           <textarea
             className="w-full border rounded px-3 py-2"
             rows={3}
@@ -196,7 +247,11 @@ export default function CreateExamPage() {
           />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+          <p className="text-sm text-red-600">
+            {error}
+          </p>
+        )}
 
         <button
           type="submit"

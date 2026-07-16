@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import get_current_user
 from app.core.database import get_database
 from app.models.exam import exam_document
+from app.services.question_service import prepare_questions_for_exam_from_pdf
 from app.schemas.exam import (
     ExamCreateRequest,
     ExamListResponse,
@@ -45,14 +47,73 @@ def serialize_exam(exam: dict) -> dict:
         "submitted_at": exam.get("submitted_at"),
     }
 
-
 @router.post("", response_model=ExamResponse, status_code=status.HTTP_201_CREATED)
 def create_exam(
     payload: ExamCreateRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Create an exam and:
+    - If source_type='pdf', try to auto-generate questions from the PDF.
+    - Otherwise, mark generation_status as 'not_applicable'.
+    """
     db = get_database()
 
+    # ---- Basic logical validations ----
+    total_requested_questions = payload.objective_count + payload.descriptive_count
+    if total_requested_questions <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must request at least one question (objective + descriptive > 0).",
+        )
+
+    if payload.options_count < 2 or payload.options_count > 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="options_count must be between 2 and 6.",
+        )
+
+    # Source-specific validation
+    if payload.source_type == "pdf" and not payload.pdf_filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="pdf_filename is required for pdf-based exams.",
+        )
+
+    if payload.source_type == "topic" and not payload.topic_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="topic_name is required for topic-based exams.",
+        )
+
+    # Timer-specific validation
+    if payload.timer_mode == "full_exam":
+        if payload.total_duration_minutes is None or payload.total_duration_minutes <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="total_duration_minutes must be positive for 'full_exam' timer mode.",
+            )
+
+    if payload.timer_mode == "per_section":
+        if not payload.section_timers:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="section_timers must be provided for 'per_section' timer mode.",
+            )
+        if any(st.duration_minutes <= 0 for st in payload.section_timers):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Each section timer duration_minutes must be positive.",
+            )
+
+    if payload.timer_mode == "per_question":
+        if payload.question_time_seconds is None or payload.question_time_seconds <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="question_time_seconds must be positive for 'per_question' timer mode.",
+            )
+
+    # ---- Build initial exam document (0 total_questions; will update after generation) ----
     new_exam = exam_document(
         user_id=str(current_user["_id"]),
         title=payload.title,
@@ -71,10 +132,74 @@ def create_exam(
         instructions=payload.instructions,
     )
 
-    result = db.exams.insert_one(new_exam)
-    created_exam = db.exams.find_one({"_id": result.inserted_id})
+    insert_result = db.exams.insert_one(new_exam)
+    exam = db.exams.find_one({"_id": insert_result.inserted_id})
 
-    return serialize_exam(created_exam)
+    if not exam:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create exam.",
+        )
+
+    total_questions = 0
+    prepared_at = None
+
+    # Decide whether generation applies at all
+    if exam["source_type"] != "pdf":
+        generation_status = "not_applicable"
+    else:
+        # Default to failed; will set to completed if generation succeeds
+        generation_status = "failed"
+        try:
+            if exam["pdf_filename"]:
+                uploads_dir = Path("uploads")
+                pdf_path = uploads_dir / exam["pdf_filename"]
+
+                if not pdf_path.exists():
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Uploaded PDF not found at {pdf_path}",
+                    )
+
+                file_bytes = pdf_path.read_bytes()
+
+                num_questions = prepare_questions_for_exam_from_pdf(
+                    exam_id=str(exam["_id"]),
+                    user_id=str(current_user["_id"]),
+                    file_name=exam["pdf_filename"],
+                    file_bytes=file_bytes,
+                    objective_count=exam["objective_count"],
+                    descriptive_count=exam["descriptive_count"],
+                    options_count=exam["options_count"],
+                    difficulty=exam["difficulty"],
+                    input_mode=exam["input_mode"],
+                )
+
+                total_questions = num_questions
+                generation_status = "completed"
+                prepared_at = datetime.now(timezone.utc)
+        except HTTPException:
+            # Bubble up HTTP errors (e.g., missing PDF)
+            raise
+        except Exception:
+            # Keep generation_status = "failed"
+            generation_status = "failed"
+
+    # ---- Update exam with generation info and total_questions ----
+    db.exams.update_one(
+        {"_id": exam["_id"]},
+        {
+            "$set": {
+                "total_questions": total_questions,
+                "generation_status": generation_status,
+                "prepared_at": prepared_at,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+
+    updated_exam = db.exams.find_one({"_id": exam["_id"]})
+    return serialize_exam(updated_exam)
 
 
 @router.get("", response_model=ExamListResponse)

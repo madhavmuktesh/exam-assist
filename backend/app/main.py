@@ -1,3 +1,5 @@
+# backend/app/main.py (or equivalent entrypoint)
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,6 +11,7 @@ from app.api.v1.pipeline import router as pipeline_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.questions import router as questions_router
 from app.api.v1.responses import router as responses_router
+from app.api.v1.files import router as files_router  # ← ADD THIS
 from app.core.config import get_settings
 from app.core.database import create_indexes, ping_database
 
@@ -44,6 +47,8 @@ app.include_router(exams_router, prefix="/api/v1")
 app.include_router(questions_router, prefix="/api/v1")
 app.include_router(responses_router, prefix="/api/v1")
 app.include_router(pipeline_router, prefix="/api/v1")
+app.include_router(files_router, prefix="/api/v1")  # ← ADD THIS
+
 
 @app.get("/")
 async def root():
