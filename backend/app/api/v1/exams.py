@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_current_user
 from app.core.database import get_database
@@ -202,17 +202,34 @@ def create_exam(
     return serialize_exam(updated_exam)
 
 
-@router.get("", response_model=ExamListResponse)
-def list_exams(current_user: dict = Depends(get_current_user)):
+@router.get("", response_model=PaginatedExamListResponse)
+def list_exams(
+    current_user: dict = Depends(get_current_user),
+    page: int = Query(default=1, ge=1, description="Page number"),
+    limit: int = Query(default=10, ge=1, le=100, description="Items per page"),
+):
     db = get_database()
 
+    query = {"user_id": str(current_user["_id"]), "is_active": True}
+    total = db.exams.count_documents(query)
+
+    skip = (page - 1) * limit
+
     exams = list(
-        db.exams.find({"user_id": str(current_user["_id"]), "is_active": True}).sort(
-            "created_at", -1
-        )
+        db.exams.find(query)
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
     )
 
-    return {"exams": [serialize_exam(exam) for exam in exams]}
+    return {
+        "exams": [serialize_exam(exam) for exam in exams],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_next": (skip + limit) < total,
+        "has_prev": page > 1,
+    }
 
 
 @router.get("/{exam_id}", response_model=ExamResponse)

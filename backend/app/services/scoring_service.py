@@ -1,9 +1,16 @@
 import json
-from app.core.config import get_settings
-from openai import OpenAI
+import logging
 
-settings = get_settings()
-client = OpenAI(api_key=settings.openai_api_key)
+from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def get_openai_client():
+    """Lazy client init — reads settings at call time, not at import time."""
+    from openai import OpenAI
+    settings = get_settings()
+    return OpenAI(api_key=settings.openai_api_key), settings
 
 
 def normalize_option_ids(values: list[str]) -> list[str]:
@@ -32,24 +39,54 @@ def build_grading_prompt(question_text: str, student_answer: str, max_marks: flo
 
 
 def grade_descriptive_answer(question_text: str, student_answer: str, max_marks: float) -> dict:
-    prompt = build_grading_prompt(question_text, student_answer, max_marks)
+    """
+    Calls OpenAI to grade a descriptive answer.
+    Falls back to review_required=True if the AI call fails for any reason,
+    so the exam submission is never lost.
+    """
+    try:
+        client, settings = get_openai_client()
 
-    response = client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[
-            {"role": "system", "content": "You are a grading assistant. Return strict JSON."},
-            {"role": "user", "content": prompt},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.2,
-    )
+        if not settings.openai_api_key:
+            logger.warning("OPENAI_API_KEY is not set — marking descriptive answer for manual review.")
+            return {
+                "obtained_marks": 0.0,
+                "feedback": "AI grading unavailable — pending manual review.",
+                "review_required": True,
+            }
 
-    result = json.loads(response.choices[0].message.content)
-    return {
-        "obtained_marks": float(result["score"]),
-        "feedback": result["feedback"],
-        "review_required": False,  # AI has graded it
-    }
+        prompt = build_grading_prompt(question_text, student_answer, max_marks)
+
+        response = client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": "You are a grading assistant. Return strict JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+
+        result = json.loads(response.choices[0].message.content)
+
+        # Clamp score within valid range
+        raw_score = float(result.get("score", 0.0))
+        clamped_score = max(0.0, min(raw_score, max_marks))
+
+        return {
+            "obtained_marks": clamped_score,
+            "feedback": result.get("feedback", ""),
+            "review_required": False,
+        }
+
+    except Exception as e:
+        # Never crash exam submission because of grading failure
+        logger.error(f"AI grading failed: {e}")
+        return {
+            "obtained_marks": 0.0,
+            "feedback": "AI grading failed — pending manual review.",
+            "review_required": True,
+        }
 
 
 def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
@@ -68,7 +105,6 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
     objective_score = 0.0
     descriptive_score = 0.0
 
-    # top-level review flag: if any question needs review -> True
     review_required = False
     answer_breakdown: list[dict] = []
 
@@ -112,23 +148,21 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     objective_wrong += 1
                     is_correct = False
 
-            answer_breakdown.append(
-                {
-                    "question_id": question_id,
-                    "question_type": question_type,
-                    "question_text": question["question_text"],
-                    "marks": marks,
-                    "obtained_marks": obtained_marks,
-                    "is_attempted": is_attempted,
-                    "is_correct": is_correct,
-                    "selected_option_ids": submitted_option_ids,
-                    "correct_option_ids": correct_option_ids,
-                    "options": question.get("options", []),
-                    "descriptive_answer": None,
-                    "feedback": None,
-                    "review_required": False,
-                }
-            )
+            answer_breakdown.append({
+                "question_id": question_id,
+                "question_type": question_type,
+                "question_text": question["question_text"],
+                "marks": marks,
+                "obtained_marks": obtained_marks,
+                "is_attempted": is_attempted,
+                "is_correct": is_correct,
+                "selected_option_ids": submitted_option_ids,
+                "correct_option_ids": correct_option_ids,
+                "options": question.get("options", []),
+                "descriptive_answer": None,
+                "feedback": None,
+                "review_required": False,
+            })
 
         elif question_type == "descriptive":
             descriptive_total += 1
@@ -138,7 +172,6 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                 descriptive_attempted += 1
                 is_attempted = True
 
-                # --- AI GRADING CALL ---
                 grading = grade_descriptive_answer(
                     question["question_text"], descriptive_answer, marks
                 )
@@ -147,30 +180,26 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                 descriptive_score += obtained_marks
                 per_q_review_required = grading.get("review_required", False)
             else:
-                # No answer: leave obtained_marks at 0 but mark for manual review if you like
-                per_q_review_required = True
+                per_q_review_required = False  # unattempted — no review needed
 
-            # propagate into global flag
             if per_q_review_required:
                 review_required = True
 
-            answer_breakdown.append(
-                {
-                    "question_id": question_id,
-                    "question_type": question_type,
-                    "question_text": question["question_text"],
-                    "marks": marks,
-                    "obtained_marks": obtained_marks,
-                    "is_attempted": is_attempted,
-                    "is_correct": None,
-                    "selected_option_ids": [],
-                    "correct_option_ids": [],
-                    "options": [],
-                    "descriptive_answer": descriptive_answer,
-                    "feedback": feedback,
-                    "review_required": per_q_review_required,
-                }
-            )
+            answer_breakdown.append({
+                "question_id": question_id,
+                "question_type": question_type,
+                "question_text": question["question_text"],
+                "marks": marks,
+                "obtained_marks": obtained_marks,
+                "is_attempted": is_attempted,
+                "is_correct": None,
+                "selected_option_ids": [],
+                "correct_option_ids": [],
+                "options": [],
+                "descriptive_answer": descriptive_answer,
+                "feedback": feedback,
+                "review_required": per_q_review_required,
+            })
 
     final_score = objective_score + descriptive_score
     percentage = (final_score / max_marks * 100) if max_marks > 0 else 0.0

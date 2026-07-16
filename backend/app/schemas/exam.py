@@ -111,3 +111,11 @@ class ExamResponse(BaseModel):
 
 class ExamListResponse(BaseModel):
     exams: list[ExamResponse]
+
+class PaginatedExamListResponse(BaseModel):
+    exams: list[ExamResponse]
+    total: int
+    page: int
+    limit: int
+    has_next: bool
+    has_prev: bool
