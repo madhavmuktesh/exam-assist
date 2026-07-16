@@ -109,6 +109,7 @@ def prepare_questions_for_exam_from_pdf(
 
         # Fallback: if objective but no options, treat as descriptive
         if question_type == "objective" and not options:
+            print(f"⚠️ WARNING: No options found for Q: '{question_text}'. Converting to descriptive.")
             question_type = "descriptive"
 
         doc = question_document(
