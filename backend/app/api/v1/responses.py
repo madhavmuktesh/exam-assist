@@ -43,7 +43,7 @@ def serialize_result(item: dict) -> dict:
       question_id, question_text, question_type, marks, obtained_marks,
       is_attempted, is_correct, selected_option_ids, correct_option_ids,
       options (if you include them), descriptive_answer, correct_answer_text,
-      explanation, review_required.
+      explanation, review_required, ai_feedback (optional).
     """
     return {
         "id": str(item["_id"]),
@@ -64,6 +64,7 @@ def serialize_result(item: dict) -> dict:
         "percentage": item["percentage"],
         "status": item["status"],
         "review_required": item["review_required"],
+        # answer_breakdown items are already prepared in scoring_service.py
         "answer_breakdown": item.get("answer_breakdown", []),
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -171,9 +172,14 @@ def submit_exam(
             }
         )
     )
-    responses_map = {item["question_id"]: item for item in stored_responses}
+    # Key by question_id (string) to match questions list
+    responses_map = {str(item["question_id"]): item for item in stored_responses}
 
     # Compute scoring, breakdown, etc.
+    # score_exam is responsible for:
+    # - objective grading
+    # - calling the AI grader for descriptive questions
+    # - building answer_breakdown with obtained_marks, feedback, review flags
     scoring = score_exam(questions, responses_map)
 
     # Remove any previous result for this exam/user

@@ -1,5 +1,55 @@
+import json
+from app.core.config import get_settings
+from openai import OpenAI
+
+settings = get_settings()
+client = OpenAI(api_key=settings.openai_api_key)
+
+
 def normalize_option_ids(values: list[str]) -> list[str]:
     return sorted([value.strip() for value in values if value and value.strip()])
+
+
+def build_grading_prompt(question_text: str, student_answer: str, max_marks: float) -> str:
+    return f"""
+    You are an expert examiner. Grade the following descriptive question.
+    
+    Question: {question_text}
+    Max Marks: {max_marks}
+    Student Answer: {student_answer}
+    
+    Provide a JSON response:
+    {{
+        "score": float (0 to {max_marks}),
+        "feedback": "string (A brief justification for the marks given)"
+    }}
+    
+    Rules:
+    - Be fair but strict.
+    - If the answer is completely off-topic, give 0.
+    - Return ONLY the JSON object. No other text.
+    """.strip()
+
+
+def grade_descriptive_answer(question_text: str, student_answer: str, max_marks: float) -> dict:
+    prompt = build_grading_prompt(question_text, student_answer, max_marks)
+
+    response = client.chat.completions.create(
+        model=settings.openai_model,
+        messages=[
+            {"role": "system", "content": "You are a grading assistant. Return strict JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+
+    result = json.loads(response.choices[0].message.content)
+    return {
+        "obtained_marks": float(result["score"]),
+        "feedback": result["feedback"],
+        "review_required": False,  # AI has graded it
+    }
 
 
 def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
@@ -16,8 +66,9 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
 
     max_marks = 0.0
     objective_score = 0.0
-    descriptive_score = 0.0  # reserved if you later auto-score descriptives
+    descriptive_score = 0.0
 
+    # top-level review flag: if any question needs review -> True
     review_required = False
     answer_breakdown: list[dict] = []
 
@@ -32,20 +83,19 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
         obtained_marks = 0.0
         is_attempted = False
         is_correct: bool | None = None
+        feedback: str | None = None
+        per_q_review_required = False
 
         selected_option_ids: list[str] = []
         descriptive_answer: str | None = None
 
         if response:
-            selected_option_ids = response.get("selected_option_ids", [])
+            selected_option_ids = response.get("selected_option_ids", []) or []
             descriptive_answer = response.get("descriptive_answer")
 
         if question_type == "objective":
             objective_total += 1
-
-            correct_option_ids = normalize_option_ids(
-                question.get("correct_option_ids", [])
-            )
+            correct_option_ids = normalize_option_ids(question.get("correct_option_ids", []))
             submitted_option_ids = normalize_option_ids(selected_option_ids)
 
             if submitted_option_ids:
@@ -62,9 +112,6 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     objective_wrong += 1
                     is_correct = False
 
-            # include options in breakdown so frontend can render text + highlighting
-            options = question.get("options", [])
-
             answer_breakdown.append(
                 {
                     "question_id": question_id,
@@ -76,10 +123,9 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     "is_correct": is_correct,
                     "selected_option_ids": submitted_option_ids,
                     "correct_option_ids": correct_option_ids,
-                    "options": options,  # NEW: list of {id, text}
+                    "options": question.get("options", []),
                     "descriptive_answer": None,
-                    "correct_answer_text": None,
-                    "explanation": question.get("explanation"),
+                    "feedback": None,
                     "review_required": False,
                 }
             )
@@ -92,7 +138,21 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                 descriptive_attempted += 1
                 is_attempted = True
 
-            review_required = True
+                # --- AI GRADING CALL ---
+                grading = grade_descriptive_answer(
+                    question["question_text"], descriptive_answer, marks
+                )
+                obtained_marks = grading["obtained_marks"]
+                feedback = grading["feedback"]
+                descriptive_score += obtained_marks
+                per_q_review_required = grading.get("review_required", False)
+            else:
+                # No answer: leave obtained_marks at 0 but mark for manual review if you like
+                per_q_review_required = True
+
+            # propagate into global flag
+            if per_q_review_required:
+                review_required = True
 
             answer_breakdown.append(
                 {
@@ -100,22 +160,20 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     "question_type": question_type,
                     "question_text": question["question_text"],
                     "marks": marks,
-                    "obtained_marks": 0.0,  # manual review later
+                    "obtained_marks": obtained_marks,
                     "is_attempted": is_attempted,
                     "is_correct": None,
                     "selected_option_ids": [],
                     "correct_option_ids": [],
-                    "options": [],  # keep consistent structure
+                    "options": [],
                     "descriptive_answer": descriptive_answer,
-                    "correct_answer_text": question.get("correct_answer_text"),
-                    "explanation": question.get("explanation"),
-                    "review_required": True,
+                    "feedback": feedback,
+                    "review_required": per_q_review_required,
                 }
             )
 
     final_score = objective_score + descriptive_score
     percentage = (final_score / max_marks * 100) if max_marks > 0 else 0.0
-
     status = "pending_review" if review_required else "evaluated"
 
     return {

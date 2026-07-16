@@ -40,25 +40,83 @@ def register(payload: RegisterRequest):
     return serialize_user(created_user)
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest):
-    db = get_database()
-
-    user = db.users.find_one({"email": payload.email.lower().strip()})
+# 1. Update your existing login endpoint to return the refresh token:
+@router.post("/login", response_model=Token)
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db=Depends(get_database)
+):
+    user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-
-    if not verify_password(payload.password, user["password_hash"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
-
+    
     access_token = create_access_token(subject=str(user["_id"]))
-    return TokenResponse(access_token=access_token)
+    refresh_token = create_refresh_token(subject=str(user["_id"])) # <-- NEW
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token, # <-- NEW
+        "token_type": "bearer",
+    }
+
+
+# 2. Add the new /refresh endpoint at the bottom of auth.py:
+from jose import jwt, JWTError
+from app.schemas.auth import RefreshTokenRequest
+from app.core.config import get_settings
+
+settings = get_settings()
+
+@router.post("/refresh", response_model=Token)
+def refresh_access_token(
+    payload: RefreshTokenRequest,
+    db = Depends(get_database)
+):
+    """
+    Takes a valid refresh token and returns a new access & refresh token pair.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        # Decode the token
+        decoded_token = jwt.decode(
+            payload.refresh_token, settings.secret_key, algorithms=[settings.algorithm]
+        )
+        
+        # Verify it is actually a refresh token
+        if decoded_token.get("type") != "refresh":
+            raise credentials_exception
+            
+        user_id: str = decoded_token.get("sub")
+        if user_id is None:
+            raise credentials_exception
+            
+    except JWTError:
+        raise credentials_exception
+
+    # Verify user still exists in DB
+    from bson import ObjectId
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise credentials_exception
+
+    # Issue new pair
+    new_access_token = create_access_token(subject=str(user["_id"]))
+    new_refresh_token = create_refresh_token(subject=str(user["_id"]))
+
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer",
+    }
 
 
 @router.get("/me", response_model=UserResponse)

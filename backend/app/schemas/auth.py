@@ -29,9 +29,13 @@ class LoginRequest(BaseModel):
         return value
 
 
-class TokenResponse(BaseModel):
+class Token(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    refresh_token: str 
+    token_type: str
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 
 class UserResponse(BaseModel):

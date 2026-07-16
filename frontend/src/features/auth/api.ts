@@ -13,10 +13,22 @@ export interface RegisterPayload {
 }
 
 export async function login(payload: LoginPayload) {
-  const res = await api.post("/auth/login", payload);
-  const { access_token } = res.data;
+  // FastAPI OAuth2PasswordRequestForm expects form-encoded data, not JSON
+  const formData = new URLSearchParams();
+  formData.append("username", payload.email);
+  formData.append("password", payload.password);
+
+  const res = await api.post("/auth/login", formData, {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+
+  const { access_token, refresh_token } = res.data;
+  
   if (typeof window !== "undefined") {
     localStorage.setItem("access_token", access_token);
+    if (refresh_token) {
+      localStorage.setItem("refresh_token", refresh_token);
+    }
   }
   return res.data;
 }
@@ -34,5 +46,7 @@ export async function getMe() {
 export function logout() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+    window.location.href = "/login"; // Force redirect to login page
   }
 }
