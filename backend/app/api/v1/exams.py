@@ -13,6 +13,7 @@ from app.schemas.exam import (
     ExamListResponse,
     ExamResponse,
     ExamUpdateRequest,
+    PaginatedExamListResponse,
 )
 
 router = APIRouter(prefix="/exams", tags=["exams"])
