@@ -1,17 +1,22 @@
+import uuid
 from pathlib import Path
-
 import fitz  # PyMuPDF
-
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def save_uploaded_pdf(file_name: str, file_bytes: bytes) -> str:
-    safe_name = file_name.replace("/", "_").replace("\\", "_").strip()
-    target_path = UPLOAD_DIR / safe_name
+    """
+    Saves PDF with a UUID prefix to prevent filename collisions
+    and path traversal attacks.
+    """
+    # Strip any path components, keep only the base filename
+    safe_name = Path(file_name).name.replace(" ", "_")
+    unique_name = f"{uuid.uuid4().hex}_{safe_name}"
+    target_path = UPLOAD_DIR / unique_name
     target_path.write_bytes(file_bytes)
-    return str(target_path)
+    return unique_name  # return just the filename, not the full path
 
 
 def extract_text_from_pdf(pdf_path: str) -> dict:
