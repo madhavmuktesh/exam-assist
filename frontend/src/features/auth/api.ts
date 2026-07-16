@@ -1,4 +1,3 @@
-// frontend/src/features/auth/api.ts
 import api from "@/lib/apiClient";
 
 export interface LoginPayload {
@@ -10,31 +9,35 @@ export interface RegisterPayload {
   email: string;
   password: string;
   full_name?: string;
+  phone_number: string;
 }
 
 export async function login(payload: LoginPayload) {
-  // FastAPI OAuth2PasswordRequestForm expects form-encoded data, not JSON
-  const formData = new URLSearchParams();
-  formData.append("username", payload.email);
-  formData.append("password", payload.password);
-
-  const res = await api.post("/auth/login", formData, {
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  const res = await api.post("/auth/login", {
+    email: payload.email,
+    password: payload.password,
   });
 
   const { access_token, refresh_token } = res.data;
-  
+
   if (typeof window !== "undefined") {
     localStorage.setItem("access_token", access_token);
     if (refresh_token) {
       localStorage.setItem("refresh_token", refresh_token);
     }
   }
+
   return res.data;
 }
 
 export async function register(payload: RegisterPayload) {
-  const res = await api.post("/auth/register", payload);
+  const res = await api.post("/auth/register", {
+    full_name: payload.full_name,
+    email: payload.email,
+    phone_number: payload.phone_number,
+    password: payload.password,
+  });
+
   return res.data;
 }
 
@@ -47,6 +50,6 @@ export function logout() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("access_token");
     localStorage.removeItem("refresh_token");
-    window.location.href = "/login"; // Force redirect to login page
+    window.location.href = "/login";
   }
 }
