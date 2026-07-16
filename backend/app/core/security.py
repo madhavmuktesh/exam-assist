@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
-
+import secrets
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -63,3 +63,7 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
         return payload
     except JWTError:
         return None
+
+def generate_reset_token() -> str:
+    """Generates a secure random hex token for password reset."""
+    return secrets.token_urlsafe(32)

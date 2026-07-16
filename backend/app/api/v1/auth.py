@@ -1,3 +1,6 @@
+import secrets
+from datetime import datetime, timedelta, timezone
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError, jwt
@@ -13,15 +16,20 @@ from app.core.security import (
 )
 from app.models.user import user_document
 from app.schemas.auth import (
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     RefreshTokenRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     Token,
     UserResponse,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
+
+PASSWORD_RESET_EXPIRE_MINUTES = 30
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -99,6 +107,71 @@ def refresh_access_token(payload: RefreshTokenRequest, db=Depends(get_database))
         "refresh_token": create_refresh_token(subject=str(user["_id"])),
         "token_type": "bearer",
     }
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+def forgot_password(payload: ForgotPasswordRequest, db=Depends(get_database)):
+    user = db.users.find_one({"email": payload.email.lower().strip()})
+
+    # Always return 200 — never reveal whether the email exists
+    if not user:
+        return {
+            "message": "If that email is registered, a reset link has been sent.",
+            "reset_token": None,
+        }
+
+    reset_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
+
+    db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "password_reset_token": reset_token,
+            "password_reset_expires": expires_at,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+
+    # TODO: send reset_token via email (e.g. resend/sendgrid)
+    # Expose token in response only during development
+    exposed_token = reset_token if settings.app_env == "development" else None
+
+    return {
+        "message": "If that email is registered, a reset link has been sent.",
+        "reset_token": exposed_token,
+    }
+
+
+@router.post("/reset-password")
+def reset_password(payload: ResetPasswordRequest, db=Depends(get_database)):
+    now = datetime.now(timezone.utc)
+
+    user = db.users.find_one({
+        "password_reset_token": payload.reset_token,
+        "password_reset_expires": {"$gt": now},
+    })
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(payload.new_password),
+                "updated_at": now,
+            },
+            "$unset": {
+                "password_reset_token": "",
+                "password_reset_expires": "",
+            },
+        },
+    )
+
+    return {"message": "Password has been reset successfully."}
 
 
 @router.get("/me", response_model=UserResponse)
