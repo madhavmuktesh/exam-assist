@@ -21,20 +21,14 @@ class Settings(BaseSettings):
     refresh_token_expire_minutes: int = 60 * 24 * 2
 
     backend_cors_origins: List[str] = Field(
-        default=["http://localhost:3000", "http://127.0.0.1:3000"])
-
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
+        default=["http://localhost:3000", "http://127.0.0.1:3000"]
     )
 
-    @field_validator("backend_cors_origins")
-    @classmethod
-    def strip_trailing_slash(cls, value: List[str]) -> List[str]:
-        return [origin.rstrip("/") for origin in value]
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "openrouter/free"
+    openrouter_site_url: str = "http://localhost:3000"
+    openrouter_site_name: str = "Exam Assistant"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -42,6 +36,11 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @field_validator("backend_cors_origins")
+    @classmethod
+    def strip_trailing_slash(cls, value: List[str]) -> List[str]:
+        return [origin.rstrip("/") for origin in value]
 
 
 @lru_cache

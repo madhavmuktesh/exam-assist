@@ -10,7 +10,15 @@ def get_openai_client():
     from openai import OpenAI
 
     settings = get_settings()
-    return OpenAI(api_key=settings.openai_api_key), settings
+    client = OpenAI(
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
+        default_headers={
+            "HTTP-Referer": settings.openrouter_site_url,
+            "X-OpenRouter-Title": settings.openrouter_site_name,
+        },
+    )
+    return client, settings
 
 
 def normalize_option_ids(values: list[str]) -> list[str]:
@@ -58,9 +66,9 @@ def grade_descriptive_answer(
     try:
         client, settings = get_openai_client()
 
-        if not settings.openai_api_key:
+        if not settings.openrouter_api_key:
             logger.warning(
-                "OPENAI_API_KEY is not set — marking descriptive answer for manual review."
+                "OPENROUTER_API_KEY is not set — marking descriptive answer for manual review."
             )
             return {
                 "obtained_marks": 0.0,
@@ -76,7 +84,7 @@ def grade_descriptive_answer(
         )
 
         response = client.chat.completions.create(
-            model=settings.openai_model,
+            model=settings.openrouter_model,
             messages=[
                 {
                     "role": "system",

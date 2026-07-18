@@ -7,8 +7,17 @@ from pydantic import ValidationError
 from app.core.config import get_settings
 from app.schemas.llm_question import LLMGeneratedQuestionSet
 
+
 settings = get_settings()
-client = OpenAI(api_key=settings.openai_api_key)
+
+client = OpenAI(
+    api_key=settings.openrouter_api_key,
+    base_url=settings.openrouter_base_url,
+    default_headers={
+        "HTTP-Referer": settings.openrouter_site_url,
+        "X-OpenRouter-Title": settings.openrouter_site_name,
+    },
+)
 
 
 def chunk_text(text: str, chunk_size: int = 4000) -> list[str]:
@@ -79,6 +88,7 @@ Source material:
 {text}
 """.strip()
 
+
 def build_extraction_prompt(
     text: str,
     options_count: int,
@@ -86,7 +96,7 @@ def build_extraction_prompt(
 ) -> str:
     return f"""
 You are an expert data extractor. I am providing you with the raw text of an uploaded question paper.
-Your task is to accurately EXTRACT the existing questions and their options from this text. 
+Your task is to accurately EXTRACT the existing questions and their options from this text.
 Do NOT generate or invent new questions. Only extract what is explicitly there.
 
 Return valid JSON only in this format:
@@ -128,8 +138,8 @@ def generate_questions_from_content(
     options_count: int,
     difficulty: str,
 ) -> list[dict]:
-    if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY is not configured")
+    if not settings.openrouter_api_key:
+        raise ValueError("OPENROUTER_API_KEY is not configured")
 
     chunks = chunk_text(text, chunk_size=5000)
     source_text = "\n\n".join(
@@ -145,7 +155,7 @@ def generate_questions_from_content(
     )
 
     response = client.chat.completions.create(
-        model=settings.openai_model,
+        model=settings.openrouter_model,
         messages=[
             {
                 "role": "system",
@@ -170,15 +180,15 @@ def generate_questions_from_content(
 
     return [question.model_dump() for question in validated.questions]
 
+
 def extract_questions_with_llm(
     text: str,
     options_count: int,
     difficulty: str,
 ) -> list[dict]:
-    if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY is not configured")
+    if not settings.openrouter_api_key:
+        raise ValueError("OPENROUTER_API_KEY is not configured")
 
-    # Limit text size to avoid massive token costs, take first 5000 chars roughly
     chunks = chunk_text(text, chunk_size=5000)
     source_text = "\n\n".join(chunks[:6])
 
@@ -189,7 +199,7 @@ def extract_questions_with_llm(
     )
 
     response = client.chat.completions.create(
-        model=settings.openai_model,
+        model=settings.openrouter_model,
         messages=[
             {
                 "role": "system",
@@ -201,7 +211,7 @@ def extract_questions_with_llm(
             },
         ],
         response_format={"type": "json_object"},
-        temperature=0.1, # Low temperature because we want exact extraction, not creativity
+        temperature=0.1,
     )
 
     raw_content = response.choices[0].message.content
@@ -224,13 +234,8 @@ def extract_existing_questions(
     current_question = None
     question_order = 1
 
-    # Matches Q1., Q1, Question 1, 1., 1) etc.
     question_pattern = re.compile(r"^(?:Q(?:uestion)?\s*\d+|\d+)[\).:]?\s+(.+)", re.IGNORECASE)
-    
-    # Matches A), (A), a., a) and captures wrapped text
     option_pattern = re.compile(r"^[\(]?([A-Da-d])[\).]\s*(.*)", re.IGNORECASE)
-
-    # NEW: Matches Ans.(a), Ans(B), Answer: c, etc.
     answer_pattern = re.compile(r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Da-d])[\)]?", re.IGNORECASE)
 
     for line in lines:
@@ -238,15 +243,13 @@ def extract_existing_questions(
         o_match = option_pattern.match(line)
         ans_match = answer_pattern.match(line)
 
-        # Handle numbered lists inside a question's text
         if q_match and current_question and len(current_question["options"]) == 0:
             if re.match(r"^Q(?:uestion)?\s*\d+", line, re.IGNORECASE):
-                pass # Let it process as a new question
+                pass
             else:
                 current_question["question_text"] += "\n" + line
                 continue
 
-        # --- PROCESS NEW QUESTION ---
         if q_match:
             if current_question:
                 questions.append(current_question)
@@ -257,7 +260,7 @@ def extract_existing_questions(
                 "question_order": question_order,
                 "marks": 1,
                 "options": [],
-                "correct_option_ids": [], # This is what we will populate below
+                "correct_option_ids": [],
                 "correct_answer_text": None,
                 "explanation": "Extracted from uploaded question PDF.",
                 "section_name": "Objective",
@@ -268,16 +271,12 @@ def extract_existing_questions(
             question_order += 1
             continue
 
-        # --- PROCESS OPTIONS, ANSWERS & CONTINUATION TEXT ---
         if current_question:
-            
-            # --- NEW: Catch Answer Key ---
             if ans_match:
                 correct_letter = ans_match.group(1).upper()
                 current_question["correct_option_ids"] = [correct_letter]
                 continue
-            
-            # Process Options
+
             if o_match:
                 if len(current_question["options"]) < options_count:
                     option_id = o_match.group(1).upper()
@@ -288,7 +287,6 @@ def extract_existing_questions(
                         }
                     )
             else:
-                # Append multiline text to either the question or the last option
                 if len(current_question["options"]) == 0:
                     current_question["question_text"] += "\n" + line
                 else:
