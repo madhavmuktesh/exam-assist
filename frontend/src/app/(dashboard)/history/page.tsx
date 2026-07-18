@@ -2,8 +2,23 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getExamHistory } from "@/features/exams/api";
-import type { ExamHistoryItem } from "@/features/exams/api";
+import { getExamHistory, type ExamHistoryItem } from "@/features/exams/api";
+
+function getApiErrorMessage(error: any, fallback = "Failed to load exam history.") {
+  const detail = error?.response?.data?.detail;
+
+  if (typeof detail === "string") return detail;
+
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item?.msg).filter(Boolean).join(", ");
+  }
+
+  if (detail && typeof detail === "object" && "msg" in detail) {
+    return String(detail.msg);
+  }
+
+  return fallback;
+}
 
 export default function HistoryPage() {
   const [items, setItems] = useState<ExamHistoryItem[]>([]);
@@ -16,16 +31,12 @@ export default function HistoryPage() {
         const res = await getExamHistory();
         setItems(res.history);
       } catch (err: any) {
-        console.error("Load history error:", err?.response?.data ?? err);
-        let message = "Failed to load exam history.";
-        if (err?.response?.data?.detail) {
-          message = err.response.data.detail;
-        }
-        setError(message);
+        setError(getApiErrorMessage(err, "Failed to load exam history."));
       } finally {
         setLoading(false);
       }
     }
+
     load();
   }, []);
 
@@ -34,9 +45,13 @@ export default function HistoryPage() {
 
   if (!items.length) {
     return (
-      <div className="p-8">
-        <h1 className="text-xl font-semibold mb-4">Exam history</h1>
-        <p>You have not completed any exams yet.</p>
+      <div className="max-w-4xl mx-auto py-8 space-y-4">
+        <h1 className="text-xl font-semibold">Exam history</h1>
+        <div className="border rounded p-4 bg-white">
+          <p className="text-sm text-zinc-600">
+            You have not completed any exams yet.
+          </p>
+        </div>
       </div>
     );
   }
@@ -45,7 +60,7 @@ export default function HistoryPage() {
     <div className="max-w-4xl mx-auto py-8 space-y-6">
       <h1 className="text-xl font-semibold">Exam history</h1>
 
-      <div className="border rounded overflow-hidden">
+      <div className="border rounded overflow-hidden bg-white">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -64,12 +79,8 @@ export default function HistoryPage() {
                 <td className="px-4 py-2">
                   {item.final_score} / {item.max_marks}
                 </td>
-                <td className="px-4 py-2">
-                  {item.percentage.toFixed(2)}%
-                </td>
-                <td className="px-4 py-2">
-                  {item.status.toUpperCase()}
-                </td>
+                <td className="px-4 py-2">{item.percentage.toFixed(2)}%</td>
+                <td className="px-4 py-2">{String(item.status).toUpperCase()}</td>
                 <td className="px-4 py-2">
                   {new Date(item.created_at).toLocaleString()}
                 </td>

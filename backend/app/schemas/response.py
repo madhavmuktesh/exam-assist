@@ -3,7 +3,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-
 QuestionType = Literal["objective", "descriptive"]
 
 
@@ -19,11 +18,15 @@ class QuestionResponseSubmitItem(BaseModel):
     def validate_answer_shape(self):
         if self.question_type == "objective":
             if self.descriptive_answer is not None:
-                raise ValueError("descriptive_answer must be empty for objective questions")
+                raise ValueError(
+                    "descriptive_answer must be empty for objective questions"
+                )
 
         if self.question_type == "descriptive":
             if self.selected_option_ids:
-                raise ValueError("selected_option_ids must be empty for descriptive questions")
+                raise ValueError(
+                    "selected_option_ids must be empty for descriptive questions"
+                )
 
         return self
 
@@ -49,3 +52,18 @@ class StoredResponseView(BaseModel):
 
 class ResponseListResponse(BaseModel):
     responses: list[StoredResponseView]
+
+
+class ExamHistoryItem(BaseModel):
+    exam_id: str
+    exam_title: str
+    final_score: float
+    max_marks: float
+    percentage: float
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExamHistoryResponse(BaseModel):
+    history: list[ExamHistoryItem]

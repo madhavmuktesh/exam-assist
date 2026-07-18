@@ -3,7 +3,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-
 ResultStatus = Literal["evaluated", "pending_review", "reviewed"]
 
 
@@ -21,6 +20,7 @@ class AnswerBreakdownItem(BaseModel):
     correct_answer_text: Optional[str]
     explanation: Optional[str]
     review_required: bool
+    ai_feedback: Optional[str] = None
 
 
 class ResultResponse(BaseModel):

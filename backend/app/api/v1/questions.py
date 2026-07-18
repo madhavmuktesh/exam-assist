@@ -157,6 +157,12 @@ def start_exam_questions(
             detail="This exam has already been submitted and cannot be started again",
         )
 
+    if exam.get("generation_status") != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Exam is not ready to start. generation_status={exam.get('generation_status')}",
+        )
+
     questions = list(
         db.questions.find(
             {"exam_id": str(exam["_id"]), "is_active": True}
@@ -166,7 +172,7 @@ def start_exam_questions(
     if not questions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No questions available for this exam",
+            detail="Exam generation was marked completed, but no questions were found",
         )
 
     db.exams.update_one(

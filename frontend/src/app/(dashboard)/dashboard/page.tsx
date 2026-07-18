@@ -1,4 +1,3 @@
-// frontend/src/app/(dashboard)/dashboard/page.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
@@ -11,10 +10,11 @@ export default function DashboardPage() {
       <h1 className="text-2xl font-semibold">Exam Assistant Dashboard</h1>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="border rounded p-4 space-y-2">
+        <div className="border rounded p-4 space-y-2 bg-white">
           <h2 className="font-medium text-lg">Create exam</h2>
           <p className="text-sm text-gray-600">
-            Upload a topic or question-paper PDF and generate a configurable timed exam.
+            Upload a topic or question-paper PDF and generate a configurable
+            timed exam.
           </p>
           <button
             className="mt-2 px-4 py-2 bg-blue-600 text-white rounded"
@@ -24,7 +24,7 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="border rounded p-4 space-y-2">
+        <div className="border rounded p-4 space-y-2 bg-white">
           <h2 className="font-medium text-lg">Exam history</h2>
           <p className="text-sm text-gray-600">
             Review your past exams, scores, and performance trends.

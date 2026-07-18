@@ -1,20 +1,35 @@
-// frontend/src/app/(dashboard)/exams/[examId]/result/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getExamResult } from "@/features/exams/api";
-import type {
-  ExamResultResponse,
-  AnswerBreakdownItem,
+import {
+  getExamResult,
+  type ExamResultResponse,
+  type AnswerBreakdownItem,
 } from "@/features/exams/api";
 
-export default function ExamResultPage({
-  params,
-}: {
-  params: { examId: string };
-}) {
-  const { examId } = params;
+interface PageProps {
+  params: Promise<{ examId: string }>;
+}
+
+function getApiErrorMessage(error: any, fallback = "Failed to load exam result.") {
+  const detail = error?.response?.data?.detail;
+
+  if (typeof detail === "string") return detail;
+
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item?.msg).filter(Boolean).join(", ");
+  }
+
+  if (detail && typeof detail === "object" && "msg" in detail) {
+    return String(detail.msg);
+  }
+
+  return fallback;
+}
+
+export default function ExamResultPage({ params }: PageProps) {
+  const { examId } = use(params);
   const router = useRouter();
 
   const [result, setResult] = useState<ExamResultResponse | null>(null);
@@ -27,16 +42,12 @@ export default function ExamResultPage({
         const res = await getExamResult(examId);
         setResult(res);
       } catch (err: any) {
-        console.error("Load exam result error:", err?.response?.data ?? err);
-        let message = "Failed to load exam result.";
-        if (err?.response?.data?.detail) {
-          message = err.response.data.detail;
-        }
-        setError(message);
+        setError(getApiErrorMessage(err, "Failed to load exam result."));
       } finally {
         setLoading(false);
       }
     }
+
     load();
   }, [examId]);
 
@@ -44,31 +55,34 @@ export default function ExamResultPage({
   if (error) return <div className="p-8 text-red-600">{error}</div>;
   if (!result) return <div className="p-8">No result found.</div>;
 
+  const skippedQuestions = result.total_questions - result.attempted_questions;
+
   return (
     <div className="max-w-4xl mx-auto py-8 space-y-6">
-      {/* Summary */}
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold">Exam Result</h1>
-        <div className="border rounded p-4 space-y-1">
-          <p>Total questions: {result.attempted_question_count + result.skipped_question_count}</p>
-          <p>Attempted: {result.attempted_question_count}</p>
+        <div className="border rounded p-4 space-y-1 bg-white">
+          <p>Total questions: {result.total_questions}</p>
+          <p>Attempted: {result.attempted_questions}</p>
+          <p>Skipped: {skippedQuestions}</p>
           <p>
-            Correct: {result.correct_answer_count} / Incorrect:{" "}
-            {result.incorrect_answer_count}
+            Objective correct: {result.objective_correct} / wrong:{" "}
+            {result.objective_wrong}
           </p>
           <p>
-            Score: {result.marks_obtained} / {result.total_marks}
+            Score: {result.final_score} / {result.max_marks}
           </p>
           <p className="font-semibold">
             Percentage: {result.percentage.toFixed(2)}%
           </p>
-          <p>Status: {result.pass_fail_status.toUpperCase()}</p>
+          <p>Status: {String(result.status).toUpperCase()}</p>
+          <p>Review required: {result.review_required ? "Yes" : "No"}</p>
         </div>
       </div>
 
-      {/* Question review */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold">Question review</h2>
+
         <div className="space-y-4">
           {result.answer_breakdown.map(
             (item: AnswerBreakdownItem, index: number) => {
@@ -77,40 +91,49 @@ export default function ExamResultPage({
               return (
                 <div
                   key={item.question_id}
-                  className="border rounded p-4 space-y-2"
+                  className="border rounded p-4 space-y-2 bg-white"
                 >
-                  <div className="flex justify-between items-center">
+                  <div className="flex justify-between items-center gap-4">
                     <p className="font-medium">
                       Q{index + 1}. {item.question_text}
                     </p>
+
                     <span
                       className={
-                        item.is_correct
+                        item.is_correct === true
                           ? "text-sm font-semibold text-green-600"
-                          : "text-sm font-semibold text-red-600"
+                          : item.is_correct === false
+                          ? "text-sm font-semibold text-red-600"
+                          : "text-sm font-semibold text-amber-600"
                       }
                     >
-                      {item.is_correct ? "Correct" : "Incorrect"}
+                      {item.is_correct === true
+                        ? "Correct"
+                        : item.is_correct === false
+                        ? "Incorrect"
+                        : item.review_required
+                        ? "Pending Review"
+                        : item.is_attempted
+                        ? "Evaluated"
+                        : "Not Answered"}
                     </span>
                   </div>
 
                   <p className="text-xs text-gray-500">
-                    Marks: {item.marks_obtained} / {item.marks}
+                    Marks: {item.obtained_marks} / {item.marks}
                   </p>
 
                   {isObjective ? (
                     <div className="text-sm space-y-1">
                       <p>
                         Your answer:{" "}
-                        {item.selected_option_ids &&
-                        item.selected_option_ids.length
+                        {item.selected_option_ids?.length
                           ? item.selected_option_ids.join(", ")
                           : "Not answered"}
                       </p>
                       <p className="text-gray-700">
                         Correct answer:{" "}
-                        {item.correct_option_ids &&
-                        item.correct_option_ids.length
+                        {item.correct_option_ids?.length
                           ? item.correct_option_ids.join(", ")
                           : "Not specified"}
                       </p>
@@ -135,6 +158,19 @@ export default function ExamResultPage({
                     <p className="text-xs text-gray-600">
                       <span className="font-medium">Explanation: </span>
                       {item.explanation}
+                    </p>
+                  )}
+
+                  {item.ai_feedback && (
+                    <p className="text-xs text-blue-700">
+                      <span className="font-medium">AI feedback: </span>
+                      {item.ai_feedback}
+                    </p>
+                  )}
+
+                  {item.review_required && (
+                    <p className="text-xs text-amber-700 font-medium">
+                      This answer requires manual review.
                     </p>
                   )}
                 </div>

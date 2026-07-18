@@ -1,5 +1,3 @@
-# backend/app/api/v1/responses.py
-
 from datetime import datetime, timezone
 
 from bson import ObjectId
@@ -9,7 +7,11 @@ from app.api.deps import get_current_user
 from app.core.database import get_database
 from app.models.response import response_document
 from app.models.result import result_document
-from app.schemas.response import ExamSubmitRequest, ResponseListResponse
+from app.schemas.response import (
+    ExamHistoryResponse,
+    ExamSubmitRequest,
+    ResponseListResponse,
+)
 from app.schemas.result import ResultResponse
 from app.services.scoring_service import score_exam
 
@@ -34,17 +36,6 @@ def serialize_response_item(item: dict) -> dict:
 
 
 def serialize_result(item: dict) -> dict:
-    """
-    This is what the frontend Result page consumes.
-
-    Fields:
-    - summary: totals, scores, percentage, status, review_required
-    - answer_breakdown: list of per-question dicts including:
-      question_id, question_text, question_type, marks, obtained_marks,
-      is_attempted, is_correct, selected_option_ids, correct_option_ids,
-      options (if you include them), descriptive_answer, correct_answer_text,
-      explanation, review_required, ai_feedback (optional).
-    """
     return {
         "id": str(item["_id"]),
         "exam_id": str(item["exam_id"]),
@@ -64,10 +55,22 @@ def serialize_result(item: dict) -> dict:
         "percentage": item["percentage"],
         "status": item["status"],
         "review_required": item["review_required"],
-        # answer_breakdown items are already prepared in scoring_service.py
         "answer_breakdown": item.get("answer_breakdown", []),
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
+    }
+
+
+def serialize_history_item(result_item: dict, exam_item: dict | None) -> dict:
+    return {
+        "exam_id": str(result_item["exam_id"]),
+        "exam_title": exam_item["title"] if exam_item else "Untitled Exam",
+        "final_score": result_item["final_score"],
+        "max_marks": result_item["max_marks"],
+        "percentage": result_item["percentage"],
+        "status": result_item["status"],
+        "created_at": result_item["created_at"],
+        "updated_at": result_item["updated_at"],
     }
 
 
@@ -100,7 +103,6 @@ def submit_exam(
     db = get_database()
     exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 
-    # Load questions for this exam and user
     questions = list(
         db.questions.find(
             {
@@ -119,14 +121,12 @@ def submit_exam(
 
     question_map = {str(question["_id"]): question for question in questions}
 
-    # Remove any previous responses for this exam/user
     db.responses.delete_many(
         {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
     )
 
     stored_response_docs: list[dict] = []
 
-    # Validate and transform submitted answers into response_document
     for answer in payload.answers:
         if not ObjectId.is_valid(answer.question_id):
             raise HTTPException(
@@ -162,7 +162,6 @@ def submit_exam(
     if stored_response_docs:
         db.responses.insert_many(stored_response_docs)
 
-    # Reload stored responses (to ensure consistency with DB state)
     stored_responses = list(
         db.responses.find(
             {
@@ -172,22 +171,15 @@ def submit_exam(
             }
         )
     )
-    # Key by question_id (string) to match questions list
+
     responses_map = {str(item["question_id"]): item for item in stored_responses}
 
-    # Compute scoring, breakdown, etc.
-    # score_exam is responsible for:
-    # - objective grading
-    # - calling the AI grader for descriptive questions
-    # - building answer_breakdown with obtained_marks, feedback, review flags
     scoring = score_exam(questions, responses_map)
 
-    # Remove any previous result for this exam/user
     db.results.delete_many(
         {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
     )
 
-    # Build and insert the new result document
     result_doc = result_document(
         exam_id=str(exam["_id"]),
         user_id=str(current_user["_id"]),
@@ -211,7 +203,6 @@ def submit_exam(
 
     result_insert = db.results.insert_one(result_doc)
 
-    # Mark exam as submitted
     db.exams.update_one(
         {"_id": exam["_id"]},
         {
@@ -225,6 +216,38 @@ def submit_exam(
 
     created_result = db.results.find_one({"_id": result_insert.inserted_id})
     return serialize_result(created_result)
+
+
+@router.get("/history", response_model=ExamHistoryResponse)
+def get_exam_history(current_user: dict = Depends(get_current_user)):
+    db = get_database()
+    user_id = str(current_user["_id"])
+
+    results = list(
+        db.results.find({"user_id": user_id}).sort("created_at", -1)
+    )
+
+    if not results:
+        return {"history": []}
+
+    exam_ids = []
+    for item in results:
+        exam_id = item.get("exam_id")
+        if exam_id and ObjectId.is_valid(exam_id):
+            exam_ids.append(ObjectId(exam_id))
+
+    exams = list(
+        db.exams.find({"_id": {"$in": exam_ids}})
+    ) if exam_ids else []
+
+    exam_map = {str(exam["_id"]): exam for exam in exams}
+
+    history = [
+        serialize_history_item(item, exam_map.get(str(item["exam_id"])))
+        for item in results
+    ]
+
+    return {"history": history}
 
 
 @router.get("/exam/{exam_id}", response_model=ResponseListResponse)
@@ -253,11 +276,6 @@ def get_exam_result(
     exam_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Returns:
-    - summary fields (total_questions, scores, etc.)
-    - answer_breakdown: per-question details for review
-    """
     db = get_database()
     exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 

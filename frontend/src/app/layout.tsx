@@ -1,4 +1,3 @@
-// frontend/src/app/layout.tsx
 import "./globals.css";
 import type { ReactNode } from "react";
 

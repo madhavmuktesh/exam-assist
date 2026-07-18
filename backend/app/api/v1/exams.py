@@ -162,13 +162,10 @@ def create_exam(
                         detail=f"Uploaded PDF not found at {pdf_path}",
                     )
 
-                file_bytes = pdf_path.read_bytes()
-
                 num_questions = prepare_questions_for_exam_from_pdf(
                     exam_id=str(exam["_id"]),
                     user_id=str(current_user["_id"]),
-                    file_name=exam["pdf_filename"],
-                    file_bytes=file_bytes,
+                    pdf_path=pdf_path,
                     objective_count=exam["objective_count"],
                     descriptive_count=exam["descriptive_count"],
                     options_count=exam["options_count"],
@@ -180,11 +177,21 @@ def create_exam(
                 generation_status = "completed"
                 prepared_at = datetime.now(timezone.utc)
         except HTTPException:
-            # Bubble up HTTP errors (e.g., missing PDF)
             raise
-        except Exception:
-            # Keep generation_status = "failed"
-            generation_status = "failed"
+        except Exception as e:
+            db.exams.update_one(
+                {"_id": exam["_id"]},
+                {
+                    "$set": {
+                        "generation_status": "failed",
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Question generation failed: {str(e)}",
+            )
 
     # ---- Update exam with generation info and total_questions ----
     db.exams.update_one(
