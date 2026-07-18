@@ -130,7 +130,7 @@ def _normalize_question_docs(
             user_id=str(user_id),
             question_type=question_type,
             question_text=question_text,
-            question_order=q.get("question_order", index),
+            question_order=index, 
             marks=marks,
             options=options,
             correct_option_ids=correct_option_ids,

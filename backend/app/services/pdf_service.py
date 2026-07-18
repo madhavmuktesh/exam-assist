@@ -26,7 +26,7 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
     total_chars = 0
 
     for page in doc:
-        text = page.get_text("text")
+        text = page.get_text("text", sort=True)
         cleaned = text.strip()
         page_texts.append(
             {

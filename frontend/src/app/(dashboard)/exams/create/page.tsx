@@ -10,7 +10,6 @@ import {
   TimerMode,
   QuestionPreparationMode,
   SourceType,
-  SectionTimer,
 } from "@/features/exams/api";
 
 export default function CreateExamPage() {
@@ -30,55 +29,27 @@ export default function CreateExamPage() {
   const [durationMinutes, setDurationMinutes] = useState<number>(60);
   const [questionTimeSeconds, setQuestionTimeSeconds] = useState<number>(60);
 
-  const [sectionTimers, setSectionTimers] = useState<SectionTimer[]>([
-    { section_name: "Section A", duration_minutes: 30 },
-    { section_name: "Section B", duration_minutes: 30 },
-  ]);
-
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  function updateSectionTimer(
-    index: number,
-    field: keyof SectionTimer,
-    value: string | number,
-  ) {
-    setSectionTimers((prev) =>
-      prev.map((item, i) =>
-        i === index ? { ...item, [field]: value } : item,
-      ),
-    );
-  }
+  // New state to toggle custom extraction settings
+  const [customizeExtraction, setCustomizeExtraction] = useState(false);
 
-  function addSectionTimer() {
-    setSectionTimers((prev) => [
-      ...prev,
-      {
-        section_name: `Section ${String.fromCharCode(65 + prev.length)}`,
-        duration_minutes: 15,
-      },
-    ]);
-  }
-
-  function removeSectionTimer(index: number) {
-    setSectionTimers((prev) => prev.filter((_, i) => i !== index));
-  }
+  // Derived state to determine if fields should be disabled
+  const isExtractMode = inputMode === "extract_existing_questions";
+  const shouldDisableSettings = isExtractMode && !customizeExtraction;
 
   function getApiErrorMessage(err: any) {
     const data = err?.response?.data;
-
     if (!data) return "Failed to create exam.";
-
     if (typeof data === "string") return data;
     if (typeof data?.detail === "string") return data.detail;
-
     if (Array.isArray(data?.detail) && data.detail.length > 0) {
       const first = data.detail[0];
       if (typeof first?.msg === "string") return first.msg;
     }
-
     return "Failed to create exam.";
   }
 
@@ -96,7 +67,8 @@ export default function CreateExamPage() {
       return;
     }
 
-    if (objectiveCount + descriptiveCount <= 0) {
+    // Validate counts if generating OR if extracting with custom overrides enabled
+    if (!shouldDisableSettings && objectiveCount + descriptiveCount <= 0) {
       setError("Please request at least one question.");
       return;
     }
@@ -109,18 +81,6 @@ export default function CreateExamPage() {
     if (timerMode === "per_question" && questionTimeSeconds <= 0) {
       setError("Please enter a valid per-question time.");
       return;
-    }
-
-    if (timerMode === "per_section") {
-      const hasInvalidSection = sectionTimers.length === 0 || sectionTimers.some(
-        (section) =>
-          !section.section_name.trim() || section.duration_minutes <= 0,
-      );
-
-      if (hasInvalidSection) {
-        setError("Please provide valid section names and durations.");
-        return;
-      }
     }
 
     setLoading(true);
@@ -137,9 +97,8 @@ export default function CreateExamPage() {
           formData,
           {
             headers: { "Content-Type": "multipart/form-data" },
-          },
+          }
         );
-
         pdfFilename = uploadRes.data.pdf_filename;
       }
 
@@ -148,34 +107,28 @@ export default function CreateExamPage() {
         source_type: sourceType,
         input_mode: inputMode,
         difficulty,
-        objective_count: objectiveCount,
-        descriptive_count: descriptiveCount,
-        options_count: optionsCount,
+        objective_count: shouldDisableSettings ? 150 : objectiveCount,
+        descriptive_count: shouldDisableSettings ? 50 : descriptiveCount,
+        options_count: shouldDisableSettings ? 4 : optionsCount,
         timer_mode: timerMode,
-        total_duration_minutes:
-          timerMode === "full_exam" ? durationMinutes : null,
-        section_timers:
-          timerMode === "per_section" ? sectionTimers : [],
-        question_time_seconds:
-          timerMode === "per_question" ? questionTimeSeconds : null,
+        total_duration_minutes: timerMode === "full_exam" ? durationMinutes : null,
+        section_timers: [], 
+        question_time_seconds: timerMode === "per_question" ? questionTimeSeconds : null,
         pdf_filename: pdfFilename,
         topic_name: null,
         instructions: instructions.trim() || null,
       };
 
       const exam = await createExam(payload);
-      router.push(`/exams/${exam.id}`);
+      router.push(`/exams/${exam.id}/ready`);
     } catch (err: any) {
       const message = getApiErrorMessage(err);
-      console.error("Create exam error:", err?.response?.data ?? err);
-
       if (
         message.toLowerCase().includes("insufficient_quota") ||
-        message.toLowerCase().includes("quota") ||
         message.toLowerCase().includes("429")
       ) {
         setError(
-          "AI question generation is temporarily unavailable because the API quota is exhausted. Please try again later or switch to extracting existing questions.",
+          "AI question generation is temporarily unavailable because the API quota is exhausted. Please try again later or switch to extracting existing questions."
         );
       } else {
         setError(message);
@@ -210,7 +163,10 @@ export default function CreateExamPage() {
               <input
                 type="radio"
                 checked={inputMode === "generate_from_content"}
-                onChange={() => setInputMode("generate_from_content")}
+                onChange={() => {
+                  setInputMode("generate_from_content");
+                  setCustomizeExtraction(false); // Reset override when switching modes
+                }}
               />
               <span>Generate from content (topic/course PDF)</span>
             </label>
@@ -222,6 +178,21 @@ export default function CreateExamPage() {
               />
               <span>Extract existing questions (question-paper PDF)</span>
             </label>
+            
+            {/* The override toggle that appears only in extract mode */}
+            {isExtractMode && (
+              <div className="ml-6 mt-1">
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={customizeExtraction}
+                    onChange={(e) => setCustomizeExtraction(e.target.checked)}
+                    className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                  />
+                  Customize extraction limits (Override default auto-extract)
+                </label>
+              </div>
+            )}
           </div>
         </div>
 
@@ -239,42 +210,48 @@ export default function CreateExamPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm mb-1">MCQ count</label>
+            <label className="block text-sm mb-1 text-gray-700">MCQ count</label>
             <input
               type="number"
               min={0}
-              value={objectiveCount}
+              value={shouldDisableSettings ? "" : objectiveCount}
               onChange={(e) => setObjectiveCount(Number(e.target.value))}
-              className="w-full border rounded px-3 py-2"
+              disabled={shouldDisableSettings}
+              placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
+              className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
             />
           </div>
 
           <div>
-            <label className="block text-sm mb-1">Descriptive count</label>
+            <label className="block text-sm mb-1 text-gray-700">Descriptive count</label>
             <input
               type="number"
               min={0}
-              value={descriptiveCount}
+              value={shouldDisableSettings ? "" : descriptiveCount}
               onChange={(e) => setDescriptiveCount(Number(e.target.value))}
-              className="w-full border rounded px-3 py-2"
+              disabled={shouldDisableSettings}
+              placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
+              className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
             />
           </div>
 
           <div>
-            <label className="block text-sm mb-1">Options per question</label>
+            <label className="block text-sm mb-1 text-gray-700">Options per question</label>
             <input
               type="number"
               min={2}
               max={6}
-              value={optionsCount}
+              value={shouldDisableSettings ? "" : optionsCount}
               onChange={(e) => setOptionsCount(Number(e.target.value))}
-              className="w-full border rounded px-3 py-2"
+              disabled={shouldDisableSettings}
+              placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
+              className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
             />
           </div>
 
           {timerMode === "full_exam" && (
             <div>
-              <label className="block text-sm mb-1">Duration (minutes)</label>
+              <label className="block text-sm mb-1 text-gray-700">Duration (minutes)</label>
               <input
                 type="number"
                 min={5}
@@ -287,7 +264,7 @@ export default function CreateExamPage() {
 
           {timerMode === "per_question" && (
             <div>
-              <label className="block text-sm mb-1">
+              <label className="block text-sm mb-1 text-gray-700">
                 Time per question (seconds)
               </label>
               <input
@@ -302,11 +279,12 @@ export default function CreateExamPage() {
         </div>
 
         <div>
-          <label className="block text-sm mb-1">Difficulty</label>
+          <label className="block text-sm mb-1 text-gray-700">Difficulty</label>
           <select
             value={difficulty}
             onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-            className="w-full border rounded px-3 py-2"
+            disabled={shouldDisableSettings}
+            className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
           >
             <option value="easy">Easy</option>
             <option value="medium">Medium</option>
@@ -315,72 +293,19 @@ export default function CreateExamPage() {
         </div>
 
         <div>
-          <label className="block text-sm mb-1">Timer mode</label>
+          <label className="block text-sm mb-1 text-gray-700">Timer mode</label>
           <select
             value={timerMode}
             onChange={(e) => setTimerMode(e.target.value as TimerMode)}
             className="w-full border rounded px-3 py-2"
           >
             <option value="full_exam">Single exam timer</option>
-            <option value="per_section">Per section</option>
             <option value="per_question">Per question</option>
           </select>
         </div>
 
-        {timerMode === "per_section" && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="block text-sm font-medium">Section timers</label>
-              <button
-                type="button"
-                onClick={addSectionTimer}
-                className="px-3 py-1 text-sm border rounded"
-              >
-                Add section
-              </button>
-            </div>
-
-            {sectionTimers.map((section, index) => (
-              <div key={index} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  value={section.section_name}
-                  onChange={(e) =>
-                    updateSectionTimer(index, "section_name", e.target.value)
-                  }
-                  placeholder="Section name"
-                  className="w-full border rounded px-3 py-2"
-                />
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    value={section.duration_minutes}
-                    onChange={(e) =>
-                      updateSectionTimer(
-                        index,
-                        "duration_minutes",
-                        Number(e.target.value),
-                      )
-                    }
-                    placeholder="Minutes"
-                    className="w-full border rounded px-3 py-2"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeSectionTimer(index)}
-                    className="px-3 py-2 border rounded text-red-600"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         <div>
-          <label className="block text-sm mb-1">
+          <label className="block text-sm mb-1 text-gray-700">
             Instructions (optional)
           </label>
           <textarea
@@ -396,7 +321,7 @@ export default function CreateExamPage() {
         <button
           type="submit"
           disabled={loading}
-          className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-60"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-60 transition-colors"
         >
           {loading ? "Creating exam..." : "Create exam"}
         </button>

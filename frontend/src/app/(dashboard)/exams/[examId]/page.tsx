@@ -37,7 +37,12 @@ export default function TakeExamPage({ params }: PageProps) {
 
   const [exam, setExam] = useState<ExamResponse | null>(null);
   const [questions, setQuestions] = useState<StudentQuestion[]>([]);
+  
+  // Timer & Mode state
+  const [timerMode, setTimerMode] = useState<string>("full_exam");
+  const [questionTimeLimit, setQuestionTimeLimit] = useState<number>(60);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  
   const [submitting, setSubmitting] = useState(false);
   const [autoSubmitting, setAutoSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -54,11 +59,19 @@ export default function TakeExamPage({ params }: PageProps) {
       try {
         const examRes = await getExam(examId);
         setExam(examRes);
+        
+        const mode = examRes.timer_mode || "full_exam";
+        setTimerMode(mode);
 
-        const totalSeconds =
-          examRes.total_duration_minutes != null
-            ? examRes.total_duration_minutes * 60
-            : examRes.question_time_seconds ?? 60;
+        let totalSeconds = 60;
+        if (mode === "per_question") {
+          totalSeconds = examRes.question_time_seconds ?? 60;
+          setQuestionTimeLimit(totalSeconds);
+        } else {
+          totalSeconds = examRes.total_duration_minutes != null 
+            ? examRes.total_duration_minutes * 60 
+            : 3600;
+        }
 
         const savedProgress =
           typeof window !== "undefined"
@@ -88,18 +101,27 @@ export default function TakeExamPage({ params }: PageProps) {
   }, [examId, LOCAL_STORAGE_KEY]);
 
   useEffect(() => {
-    if (remainingSeconds === null || loading) return;
+    if (remainingSeconds === null || loading || submitting || autoSubmitting) return;
+    
     if (remainingSeconds <= 0) {
-      void handleSubmit(true);
+      if (timerMode === "per_question" && currentIndex < questions.length - 1) {
+        // Auto-advance for per-question timer
+        setCurrentIndex((c) => c + 1);
+        setRemainingSeconds(questionTimeLimit);
+      } else {
+        // Full exam over, or last question of per_question finished
+        void handleSubmit(true);
+      }
       return;
     }
 
     const id = setInterval(() => {
-      setRemainingSeconds((s) => (s !== null ? s - 1 : s));
+      setRemainingSeconds((s) => (s !== null && s > 0 ? s - 1 : 0));
     }, 1000);
 
     return () => clearInterval(id);
-  }, [remainingSeconds, loading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remainingSeconds, loading, submitting, autoSubmitting, timerMode, currentIndex, questions.length, questionTimeLimit]);
 
   useEffect(() => {
     if (loading || remainingSeconds === null || typeof window === "undefined")
@@ -140,6 +162,15 @@ export default function TakeExamPage({ params }: PageProps) {
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [submitting, autoSubmitting]);
+
+  function handleNext() {
+    if (currentIndex < questions.length - 1) {
+      setCurrentIndex((prev) => prev + 1);
+      if (timerMode === "per_question") {
+        setRemainingSeconds(questionTimeLimit);
+      }
+    }
+  }
 
   async function handleSubmit(isAutoSubmit = false) {
     if (submitting || autoSubmitting) return;
@@ -237,7 +268,7 @@ export default function TakeExamPage({ params }: PageProps) {
             className={
               remainingSeconds !== null && remainingSeconds < 300
                 ? "text-red-600 animate-pulse"
-                : ""
+                : "text-blue-700"
             }
           >
             {remainingSeconds !== null &&
@@ -250,8 +281,11 @@ export default function TakeExamPage({ params }: PageProps) {
         </div>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-6">
-        <div className="flex-1 flex flex-col gap-4">
+      {/* FIXED: Added items-start so the sidebar doesn't stretch */}
+      <div className="flex flex-col md:flex-row gap-6 items-start">
+        
+        {/* Left Column Area */}
+        <div className="flex-1 w-full flex flex-col gap-4">
           <div className="border rounded-lg p-6 bg-white shadow-sm flex-1">
             <div className="flex justify-between mb-4 border-b pb-2">
               <span className="font-semibold text-slate-700">
@@ -341,19 +375,21 @@ export default function TakeExamPage({ params }: PageProps) {
           </div>
 
           <div className="flex justify-between">
+            {/* FIXED: Hide Previous button in per_question mode */}
+            {timerMode !== "per_question" ? (
+              <button
+                onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
+                disabled={currentIndex === 0}
+                className="px-6 py-2.5 border border-slate-300 bg-white rounded-lg font-medium text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Previous
+              </button>
+            ) : (
+              <div></div> /* Empty div to push Next button to the right */
+            )}
+            
             <button
-              onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
-              disabled={currentIndex === 0}
-              className="px-6 py-2.5 border border-slate-300 bg-white rounded-lg font-medium text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors shadow-sm"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() =>
-                setCurrentIndex((prev) =>
-                  Math.min(questions.length - 1, prev + 1),
-                )
-              }
+              onClick={handleNext}
               disabled={currentIndex === questions.length - 1}
               className="px-8 py-2.5 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors shadow-sm"
             >
@@ -362,13 +398,18 @@ export default function TakeExamPage({ params }: PageProps) {
           </div>
         </div>
 
-        <div className="w-full md:w-80 md:flex-shrink-0">
-          <div className="border rounded-lg p-5 bg-white shadow-sm sticky top-6">
-            <h3 className="font-semibold text-slate-800 mb-4 border-b pb-3">
+        {/* Right Sidebar Area */}
+        <div className="w-full md:w-80 md:flex-shrink-0 lg:sticky lg:top-6">
+          <div className="border rounded-lg p-5 bg-white shadow-sm flex flex-col">
+            <h3 className="font-semibold text-slate-800 mb-4 border-b pb-3 flex-shrink-0">
               Question Palette
             </h3>
 
-            <div className="grid grid-cols-5 gap-2.5 mb-8">
+            {/* FIXED: Hardcoded max-height and overflow to guarantee scrolling */}
+            <div 
+              className="grid grid-cols-5 gap-2.5 mb-6 overflow-y-auto p-1 scrollbar-thin scrollbar-thumb-slate-300"
+              style={{ maxHeight: '350px' }}
+            >
               {questions.map((q, idx) => {
                 const hasAnswer =
                   answers[q.id] !== undefined &&
@@ -377,18 +418,30 @@ export default function TakeExamPage({ params }: PageProps) {
                 const isCurrent = idx === currentIndex;
 
                 let bgColor = "bg-slate-100 text-slate-600 hover:bg-slate-200";
-                if (isFlagged) bgColor = "bg-amber-500 text-white hover:bg-amber-600";
-                else if (hasAnswer) bgColor = "bg-green-500 text-white hover:bg-green-600";
+                
+                // Add muted style for disabled per_question mode items
+                if (timerMode === "per_question" && !isCurrent) {
+                  bgColor = "bg-slate-50 text-slate-400 opacity-60";
+                } else if (isFlagged) {
+                  bgColor = "bg-amber-500 text-white hover:bg-amber-600";
+                } else if (hasAnswer) {
+                  bgColor = "bg-green-500 text-white hover:bg-green-600";
+                }
 
                 return (
                   <button
                     key={q.id}
-                    onClick={() => setCurrentIndex(idx)}
+                    onClick={() => {
+                      if (timerMode !== "per_question") {
+                        setCurrentIndex(idx);
+                      }
+                    }}
+                    disabled={timerMode === "per_question"}
                     className={`w-full aspect-square flex items-center justify-center text-sm font-semibold rounded-md transition-all ${bgColor} ${
                       isCurrent
                         ? "ring-2 ring-blue-600 ring-offset-2 scale-110 shadow-md z-10 relative"
                         : ""
-                    }`}
+                    } ${timerMode === "per_question" && !isCurrent ? "cursor-not-allowed" : "cursor-pointer"}`}
                   >
                     {idx + 1}
                   </button>
@@ -396,7 +449,7 @@ export default function TakeExamPage({ params }: PageProps) {
               })}
             </div>
 
-            <div className="space-y-3 mb-8 text-sm font-medium text-slate-600 bg-slate-50 p-4 rounded-lg border border-slate-100">
+            <div className="space-y-3 mb-6 text-sm font-medium text-slate-600 bg-slate-50 p-4 rounded-lg border border-slate-100 flex-shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-4 h-4 bg-green-500 rounded-sm shadow-sm"></div>
                 <span>Answered</span>
@@ -414,12 +467,13 @@ export default function TakeExamPage({ params }: PageProps) {
             <button
               onClick={() => void handleSubmit(false)}
               disabled={submitting || autoSubmitting}
-              className="w-full px-4 py-3.5 bg-emerald-600 text-white font-bold rounded-lg disabled:opacity-60 hover:bg-emerald-700 transition-colors shadow-sm"
+              className="w-full px-4 py-3.5 bg-emerald-600 text-white font-bold rounded-lg disabled:opacity-60 hover:bg-emerald-700 transition-colors shadow-sm flex-shrink-0"
             >
               {submitting || autoSubmitting ? "Submitting..." : "Submit Exam"}
             </button>
           </div>
         </div>
+
       </div>
     </div>
   );

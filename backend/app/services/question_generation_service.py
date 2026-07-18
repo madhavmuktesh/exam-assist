@@ -10,6 +10,15 @@ from app.schemas.llm_question import LLMGeneratedQuestionSet
 
 settings = get_settings()
 
+def clean_json_response(raw_string: str) -> str:
+    """Removes markdown fences around JSON outputs from LLMs."""
+    text = raw_string.strip()
+    # Remove starting ```json or ```
+    text = re.sub(r"^```(?:json)?\s*\n", "", text, flags=re.IGNORECASE)
+    # Remove ending ```
+    text = re.sub(r"\n```\s*$", "", text)
+    return text.strip()
+
 client = OpenAI(
     api_key=settings.openrouter_api_key,
     base_url=settings.openrouter_base_url,
@@ -171,7 +180,8 @@ def generate_questions_from_content(
     )
 
     raw_content = response.choices[0].message.content
-    parsed = json.loads(raw_content)
+    clean_content = clean_json_response(raw_content)
+    parsed = json.loads(clean_content) # Use clean_content here
 
     try:
         validated = LLMGeneratedQuestionSet.model_validate(parsed)
@@ -215,7 +225,9 @@ def extract_questions_with_llm(
     )
 
     raw_content = response.choices[0].message.content
-    parsed = json.loads(raw_content)
+    
+    clean_content = clean_json_response(raw_content)
+    parsed = json.loads(clean_content) # Use clean_content here
 
     try:
         validated = LLMGeneratedQuestionSet.model_validate(parsed)
@@ -232,32 +244,48 @@ def extract_existing_questions(
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     questions = []
     current_question = None
-    question_order = 1
+    next_q_num = 1
+    
+    # Matches Q1. Q 1) 1. 1) Question 1: (and captures the number)
+    question_pattern = re.compile(r"^(?:Q(?:uestion)?\s*\.?\s*(\d+)|(\d+))\s*[\).:-](?:\s+(.*))?$", re.IGNORECASE)
+    
+    # Matches A) (A) a. 1. (1)
+    option_pattern = re.compile(r"^[\(]?([A-Fa-f1-6])[\).]\s+(.*)", re.IGNORECASE)
+    answer_pattern = re.compile(r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Fa-f1-6])[\)]?", re.IGNORECASE)
 
-    question_pattern = re.compile(r"^(?:Q(?:uestion)?\s*\d+|\d+)[\).:]?\s+(.+)", re.IGNORECASE)
-    option_pattern = re.compile(r"^[\(]?([A-Da-d])[\).]\s*(.*)", re.IGNORECASE)
-    answer_pattern = re.compile(r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Da-d])[\)]?", re.IGNORECASE)
+    # Maps letters/numbers to their logical sequence index
+    opt_map = {'A':1, 'B':2, 'C':3, 'D':4, 'E':5, 'F':6, '1':1, '2':2, '3':3, '4':4, '5':5, '6':6}
 
     for line in lines:
+        # Skip common NEET/SSC PDF headers and footers to keep text clean
+        lower_line = line.lower()
+        if "exam paper" in lower_line or "contact number" in lower_line or lower_line.startswith("page:"):
+            continue
+
         q_match = question_pattern.match(line)
         o_match = option_pattern.match(line)
         ans_match = answer_pattern.match(line)
 
-        if q_match and current_question and len(current_question["options"]) == 0:
-            if re.match(r"^Q(?:uestion)?\s*\d+", line, re.IGNORECASE):
-                pass
-            else:
-                current_question["question_text"] += "\n" + line
-                continue
-
+        is_new_question = False
         if q_match:
+            q_num_str = q_match.group(1) or q_match.group(2)
+            q_num = int(q_num_str)
+            
+            # Accept if it's the very first question found (allows papers starting at Q91)
+            # OR if it sequentially follows the last question (allows a gap of 5 for skipped/mangled questions)
+            if current_question is None or (next_q_num <= q_num <= next_q_num + 5):
+                is_new_question = True
+                next_q_num = q_num + 1
+                q_text = (q_match.group(3) or "").strip()
+
+        if is_new_question:
             if current_question:
                 questions.append(current_question)
-
+            
             current_question = {
                 "question_type": "objective",
-                "question_text": q_match.group(1).strip(),
-                "question_order": question_order,
+                "question_text": q_text,
+                "question_order": q_num,
                 "marks": 1,
                 "options": [],
                 "correct_option_ids": [],
@@ -268,31 +296,46 @@ def extract_existing_questions(
                 "source_chunk_ids": [],
                 "time_limit_seconds": 45,
             }
-            question_order += 1
             continue
 
-        if current_question:
-            if ans_match:
-                correct_letter = ans_match.group(1).upper()
-                current_question["correct_option_ids"] = [correct_letter]
-                continue
+        if o_match and current_question:
+            opt_id = o_match.group(1).upper()
+            opt_text = o_match.group(2).strip()
+            
+            expected_opt_num = len(current_question["options"]) + 1
+            
+            # Check if this option logically follows the previous one (e.g., expecting 'B' or '2')
+            if expected_opt_num <= options_count and opt_id in opt_map:
+                if opt_map[opt_id] == expected_opt_num:
+                    current_question["options"].append({
+                        "id": opt_id,
+                        "text": opt_text
+                    })
+                    continue
 
-            if o_match:
-                if len(current_question["options"]) < options_count:
-                    option_id = o_match.group(1).upper()
-                    current_question["options"].append(
-                        {
-                            "id": option_id,
-                            "text": o_match.group(2).strip(),
-                        }
-                    )
-            else:
-                if len(current_question["options"]) == 0:
+        if ans_match and current_question:
+            correct_letter = ans_match.group(1).upper()
+            current_question["correct_option_ids"] = [correct_letter]
+            continue
+
+        # Append trailing text to the current block (either question text or the last option)
+        if current_question:
+            if len(current_question["options"]) == 0:
+                if current_question["question_text"]:
                     current_question["question_text"] += "\n" + line
                 else:
-                    current_question["options"][-1]["text"] += " " + line
+                    current_question["question_text"] = line
+            else:
+                current_question["options"][-1]["text"] += " " + line
 
     if current_question:
         questions.append(current_question)
+
+    # Normalize question types based on successfully found options
+    for q in questions:
+        if len(q["options"]) > 0:
+            q["question_type"] = "objective"
+        else:
+            q["question_type"] = "descriptive"
 
     return questions
