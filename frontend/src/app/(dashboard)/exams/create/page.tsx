@@ -34,10 +34,8 @@ export default function CreateExamPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // New state to toggle custom extraction settings
   const [customizeExtraction, setCustomizeExtraction] = useState(false);
 
-  // Derived state to determine if fields should be disabled
   const isExtractMode = inputMode === "extract_existing_questions";
   const shouldDisableSettings = isExtractMode && !customizeExtraction;
 
@@ -67,7 +65,6 @@ export default function CreateExamPage() {
       return;
     }
 
-    // Validate counts if generating OR if extracting with custom overrides enabled
     if (!shouldDisableSettings && objectiveCount + descriptiveCount <= 0) {
       setError("Please request at least one question.");
       return;
@@ -97,8 +94,9 @@ export default function CreateExamPage() {
           formData,
           {
             headers: { "Content-Type": "multipart/form-data" },
-          }
+          },
         );
+
         pdfFilename = uploadRes.data.pdf_filename;
       }
 
@@ -112,8 +110,9 @@ export default function CreateExamPage() {
         options_count: shouldDisableSettings ? 4 : optionsCount,
         timer_mode: timerMode,
         total_duration_minutes: timerMode === "full_exam" ? durationMinutes : null,
-        section_timers: [], 
-        question_time_seconds: timerMode === "per_question" ? questionTimeSeconds : null,
+        section_timers: [],
+        question_time_seconds:
+          timerMode === "per_question" ? questionTimeSeconds : null,
         pdf_filename: pdfFilename,
         topic_name: null,
         instructions: instructions.trim() || null,
@@ -128,7 +127,7 @@ export default function CreateExamPage() {
         message.toLowerCase().includes("429")
       ) {
         setError(
-          "AI question generation is temporarily unavailable because the API quota is exhausted. Please try again later or switch to extracting existing questions."
+          "AI question generation is temporarily unavailable because the API quota is exhausted. Please try again later or switch to extracting existing questions.",
         );
       } else {
         setError(message);
@@ -139,192 +138,349 @@ export default function CreateExamPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto py-8">
-      <h1 className="text-2xl font-semibold mb-4">Create Exam</h1>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Exam title</label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="w-full border rounded px-3 py-2"
-            required
-          />
+    <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
+      <div className="space-y-4">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold text-slate-800">Create Exam</h1>
+          <p className="text-slate-500 text-sm">
+            Upload your source PDF, choose how questions should be prepared, and
+            configure timing and difficulty settings.
+          </p>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Question preparation
-          </label>
-          <div className="flex flex-col gap-2">
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                checked={inputMode === "generate_from_content"}
-                onChange={() => {
-                  setInputMode("generate_from_content");
-                  setCustomizeExtraction(false); // Reset override when switching modes
-                }}
-              />
-              <span>Generate from content (topic/course PDF)</span>
+        <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <p className="text-sm text-slate-500 font-medium">Source</p>
+            <p className="text-base font-semibold text-slate-800 uppercase">
+              {sourceType}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-sm text-slate-500 font-medium">Mode</p>
+            <p className="text-base font-semibold text-slate-800">
+              {inputMode === "generate_from_content"
+                ? "Generate"
+                : "Extract"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-sm text-slate-500 font-medium">Timer</p>
+            <p className="text-base font-semibold text-slate-800">
+              {timerMode === "full_exam" ? "Full Exam" : "Per Question"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-sm text-slate-500 font-medium">Difficulty</p>
+            <p className="text-base font-semibold text-slate-800 capitalize">
+              {difficulty}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-xl font-bold text-slate-800">Basic Details</h2>
+            <p className="text-sm text-slate-500">
+              Set the exam title and provide optional instructions for the learner.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              Exam Title
             </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                checked={inputMode === "extract_existing_questions"}
-                onChange={() => setInputMode("extract_existing_questions")}
-              />
-              <span>Extract existing questions (question-paper PDF)</span>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Enter exam title"
+              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              Instructions (optional)
             </label>
-            
-            {/* The override toggle that appears only in extract mode */}
-            {isExtractMode && (
-              <div className="ml-6 mt-1">
-                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={customizeExtraction}
-                    onChange={(e) => setCustomizeExtraction(e.target.checked)}
-                    className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
-                  />
-                  Customize extraction limits (Override default auto-extract)
+            <textarea
+              rows={4}
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="Add any special instructions, rules, or notes for this exam"
+              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-800 outline-none resize-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+            />
+          </div>
+        </div>
+
+        <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-xl font-bold text-slate-800">Question Source</h2>
+            <p className="text-sm text-slate-500">
+              Choose whether to generate questions from content or extract them from
+              an existing question paper.
+            </p>
+          </div>
+
+          <div className="grid gap-3">
+            <label
+              className={`rounded-xl border px-4 py-4 cursor-pointer transition ${
+                inputMode === "generate_from_content"
+                  ? "border-slate-800 bg-slate-50"
+                  : "border-slate-200 bg-white hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="radio"
+                  checked={inputMode === "generate_from_content"}
+                  onChange={() => {
+                    setInputMode("generate_from_content");
+                    setCustomizeExtraction(false);
+                  }}
+                  className="mt-1"
+                />
+                <div>
+                  <p className="font-semibold text-slate-800">
+                    Generate from content
+                  </p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Best for topic notes, textbook material, or course PDFs.
+                  </p>
+                </div>
+              </div>
+            </label>
+
+            <label
+              className={`rounded-xl border px-4 py-4 cursor-pointer transition ${
+                inputMode === "extract_existing_questions"
+                  ? "border-slate-800 bg-slate-50"
+                  : "border-slate-200 bg-white hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="radio"
+                  checked={inputMode === "extract_existing_questions"}
+                  onChange={() => setInputMode("extract_existing_questions")}
+                  className="mt-1"
+                />
+                <div>
+                  <p className="font-semibold text-slate-800">
+                    Extract existing questions
+                  </p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Best for question-paper PDFs where questions already exist.
+                  </p>
+                </div>
+              </div>
+            </label>
+          </div>
+
+          {isExtractMode && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+              <label className="flex items-start gap-3 text-sm text-amber-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={customizeExtraction}
+                  onChange={(e) => setCustomizeExtraction(e.target.checked)}
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  Customize extraction limits to override the default auto-extract
+                  values.
+                </span>
+              </label>
+            </div>
+          )}
+
+          {sourceType === "pdf" && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                PDF File
+              </label>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-4 file:rounded-md file:border-0 file:bg-slate-800 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-700"
+              />
+              {file && (
+                <p className="mt-2 text-sm text-slate-500">
+                  Selected file: <span className="font-medium text-slate-700">{file.name}</span>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-xl font-bold text-slate-800">
+              Question Configuration
+            </h2>
+            <p className="text-sm text-slate-500">
+              Set counts, options, and difficulty. Some fields are auto-managed in
+              extraction mode unless customization is enabled.
+            </p>
+          </div>
+
+          {shouldDisableSettings && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Extraction mode is using automatic defaults for question counts and
+              options. Enable customization above to override them.
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                MCQ Count
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={shouldDisableSettings ? "" : objectiveCount}
+                onChange={(e) => setObjectiveCount(Number(e.target.value))}
+                disabled={shouldDisableSettings}
+                placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
+                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Descriptive Count
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={shouldDisableSettings ? "" : descriptiveCount}
+                onChange={(e) => setDescriptiveCount(Number(e.target.value))}
+                disabled={shouldDisableSettings}
+                placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
+                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Options per Question
+              </label>
+              <input
+                type="number"
+                min={2}
+                max={6}
+                value={shouldDisableSettings ? "" : optionsCount}
+                onChange={(e) => setOptionsCount(Number(e.target.value))}
+                disabled={shouldDisableSettings}
+                placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
+                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Difficulty
+              </label>
+              <select
+                value={difficulty}
+                onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+                disabled={shouldDisableSettings}
+                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              >
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-xl font-bold text-slate-800">Timing Settings</h2>
+            <p className="text-sm text-slate-500">
+              Choose how time should be applied across the exam.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              Timer Mode
+            </label>
+            <select
+              value={timerMode}
+              onChange={(e) => setTimerMode(e.target.value as TimerMode)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+            >
+              <option value="full_exam">Single exam timer</option>
+              <option value="per_question">Per question</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {timerMode === "full_exam" && (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Duration (minutes)
                 </label>
+                <input
+                  type="number"
+                  min={5}
+                  value={durationMinutes}
+                  onChange={(e) => setDurationMinutes(Number(e.target.value))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                />
+              </div>
+            )}
+
+            {timerMode === "per_question" && (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Time per question (seconds)
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  value={questionTimeSeconds}
+                  onChange={(e) => setQuestionTimeSeconds(Number(e.target.value))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                />
               </div>
             )}
           </div>
         </div>
 
-        {sourceType === "pdf" && (
-          <div>
-            <label className="block text-sm font-medium mb-1">PDF file</label>
-            <input
-              type="file"
-              accept="application/pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="w-full"
-            />
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm">
+            {error}
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm mb-1 text-gray-700">MCQ count</label>
-            <input
-              type="number"
-              min={0}
-              value={shouldDisableSettings ? "" : objectiveCount}
-              onChange={(e) => setObjectiveCount(Number(e.target.value))}
-              disabled={shouldDisableSettings}
-              placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
-              className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1 text-gray-700">Descriptive count</label>
-            <input
-              type="number"
-              min={0}
-              value={shouldDisableSettings ? "" : descriptiveCount}
-              onChange={(e) => setDescriptiveCount(Number(e.target.value))}
-              disabled={shouldDisableSettings}
-              placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
-              className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1 text-gray-700">Options per question</label>
-            <input
-              type="number"
-              min={2}
-              max={6}
-              value={shouldDisableSettings ? "" : optionsCount}
-              onChange={(e) => setOptionsCount(Number(e.target.value))}
-              disabled={shouldDisableSettings}
-              placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
-              className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
-            />
-          </div>
-
-          {timerMode === "full_exam" && (
-            <div>
-              <label className="block text-sm mb-1 text-gray-700">Duration (minutes)</label>
-              <input
-                type="number"
-                min={5}
-                value={durationMinutes}
-                onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                className="w-full border rounded px-3 py-2"
-              />
-            </div>
-          )}
-
-          {timerMode === "per_question" && (
-            <div>
-              <label className="block text-sm mb-1 text-gray-700">
-                Time per question (seconds)
-              </label>
-              <input
-                type="number"
-                min={5}
-                value={questionTimeSeconds}
-                onChange={(e) => setQuestionTimeSeconds(Number(e.target.value))}
-                className="w-full border rounded px-3 py-2"
-              />
-            </div>
-          )}
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1 text-gray-700">Difficulty</label>
-          <select
-            value={difficulty}
-            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-            disabled={shouldDisableSettings}
-            className="w-full border rounded px-3 py-2 disabled:bg-gray-100 disabled:text-gray-400"
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            type="submit"
+            disabled={loading}
+            className="inline-flex items-center justify-center px-5 py-2.5 rounded-lg bg-slate-800 text-white font-medium hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <option value="easy">Easy</option>
-            <option value="medium">Medium</option>
-            <option value="hard">Hard</option>
-          </select>
-        </div>
+            {loading ? "Creating exam..." : "Create exam"}
+          </button>
 
-        <div>
-          <label className="block text-sm mb-1 text-gray-700">Timer mode</label>
-          <select
-            value={timerMode}
-            onChange={(e) => setTimerMode(e.target.value as TimerMode)}
-            className="w-full border rounded px-3 py-2"
+          <button
+            type="button"
+            onClick={() => router.back()}
+            disabled={loading}
+            className="inline-flex items-center justify-center px-5 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <option value="full_exam">Single exam timer</option>
-            <option value="per_question">Per question</option>
-          </select>
+            Cancel
+          </button>
         </div>
-
-        <div>
-          <label className="block text-sm mb-1 text-gray-700">
-            Instructions (optional)
-          </label>
-          <textarea
-            className="w-full border rounded px-3 py-2"
-            rows={3}
-            value={instructions}
-            onChange={(e) => setInstructions(e.target.value)}
-          />
-        </div>
-
-        {error && <p className="text-sm text-red-600">{error}</p>}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-60 transition-colors"
-        >
-          {loading ? "Creating exam..." : "Create exam"}
-        </button>
       </form>
     </div>
   );

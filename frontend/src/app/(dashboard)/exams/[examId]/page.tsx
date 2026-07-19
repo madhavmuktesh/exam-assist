@@ -1,27 +1,52 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import {
-  getExam,
-  startExamQuestions,
+  cancelExam,
+  pauseExam,
+  startExam,
   submitExamResponses,
-  type ExamResponse,
-  type StudentQuestion,
+  type ExamSubmitRequest,
   type QuestionResponseSubmitItem,
+  type QuestionType,
+  type StartExamResponse,
+  type StudentQuestion,
 } from "@/features/exams/api";
 
-interface PageProps {
-  params: Promise<{ examId: string }>;
+type ObjectiveAnswerMap = Record<string, string[]>;
+type DescriptiveAnswerMap = Record<string, string>;
+type FlaggedMap = Record<string, boolean>;
+type TimeTakenMap = Record<string, number>;
+
+type LeaveAction = "pause" | "cancel" | "submit";
+
+function formatTime(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, totalSeconds);
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+      2,
+      "0",
+    )}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(
+    2,
+    "0",
+  )}`;
 }
 
-function getApiErrorMessage(error: any, fallback = "Something went wrong.") {
+function getApiErrorMessage(error: any, fallback: string): string {
   const detail = error?.response?.data?.detail;
 
   if (typeof detail === "string") return detail;
 
   if (Array.isArray(detail)) {
-    return detail.map((item) => item?.msg).filter(Boolean).join(", ");
+    return detail.map((item) => item?.msg).filter(Boolean).join(", ") || fallback;
   }
 
   if (detail && typeof detail === "object" && "msg" in detail) {
@@ -31,450 +56,784 @@ function getApiErrorMessage(error: any, fallback = "Something went wrong.") {
   return fallback;
 }
 
-export default function TakeExamPage({ params }: PageProps) {
-  const { examId } = use(params);
-  const router = useRouter();
+function buildAnswerPayload(
+  questions: StudentQuestion[],
+  objectiveAnswers: ObjectiveAnswerMap,
+  descriptiveAnswers: DescriptiveAnswerMap,
+  flaggedMap: FlaggedMap,
+  timeTakenMap: TimeTakenMap,
+): ExamSubmitRequest {
+  const answers: QuestionResponseSubmitItem[] = questions.map((question) => ({
+    question_id: question.id,
+    question_type: question.question_type as QuestionType,
+    selected_option_ids: objectiveAnswers[question.id] ?? [],
+    descriptive_answer:
+      question.question_type === "descriptive"
+        ? descriptiveAnswers[question.id] ?? ""
+        : null,
+    time_taken_seconds: timeTakenMap[question.id] ?? 0,
+    is_flagged_for_review: flaggedMap[question.id] ?? false,
+  }));
 
-  const [exam, setExam] = useState<ExamResponse | null>(null);
-  const [questions, setQuestions] = useState<StudentQuestion[]>([]);
-  
-  // Timer & Mode state
-  const [timerMode, setTimerMode] = useState<string>("full_exam");
-  const [questionTimeLimit, setQuestionTimeLimit] = useState<number>(60);
-  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
-  
-  const [submitting, setSubmitting] = useState(false);
-  const [autoSubmitting, setAutoSubmitting] = useState(false);
+  return { answers };
+}
+
+export default function TakeExamPage() {
+  const router = useRouter();
+  const params = useParams();
+  const rawExamId = params?.examId;
+  const examId = Array.isArray(rawExamId) ? rawExamId[0] : String(rawExamId ?? "");
+
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [questions, setQuestions] = useState<StudentQuestion[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [timerMode, setTimerMode] =
+    useState<StartExamResponse["timer_mode"]>("full_exam");
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+
+  const [objectiveAnswers, setObjectiveAnswers] =
+    useState<ObjectiveAnswerMap>({});
+  const [descriptiveAnswers, setDescriptiveAnswers] =
+    useState<DescriptiveAnswerMap>({});
+  const [flaggedMap, setFlaggedMap] = useState<FlaggedMap>({});
+  const [timeTakenMap, setTimeTakenMap] = useState<TimeTakenMap>({});
+
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [pendingBackNavigation, setPendingBackNavigation] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [flagged, setFlagged] = useState<Record<string, boolean>>({});
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const hasMountedRef = useRef(false);
+  const allowNavigationRef = useRef(false);
+  const autoSubmittedRef = useRef(false);
+  const submittingRef = useRef(false);
+  const questionEnterTimestampRef = useRef<number>(Date.now());
+  const intervalRef = useRef<number | null>(null);
+  const lastSyncedRemainingRef = useRef<number>(0);
 
-  const LOCAL_STORAGE_KEY = `exam_progress_${examId}`;
+  const currentQuestion = questions[currentIndex] ?? null;
 
   useEffect(() => {
-    async function load() {
-      try {
-        const examRes = await getExam(examId);
-        setExam(examRes);
-        
-        const mode = examRes.timer_mode || "full_exam";
-        setTimerMode(mode);
+    submittingRef.current = submitting;
+  }, [submitting]);
 
-        let totalSeconds = 60;
-        if (mode === "per_question") {
-          totalSeconds = examRes.question_time_seconds ?? 60;
-          setQuestionTimeLimit(totalSeconds);
-        } else {
-          totalSeconds = examRes.total_duration_minutes != null 
-            ? examRes.total_duration_minutes * 60 
-            : 3600;
-        }
-
-        const savedProgress =
-          typeof window !== "undefined"
-            ? localStorage.getItem(LOCAL_STORAGE_KEY)
-            : null;
-
-        if (savedProgress) {
-          const parsed = JSON.parse(savedProgress);
-          setAnswers(parsed.answers || {});
-          setFlagged(parsed.flagged || {});
-          setRemainingSeconds(parsed.remainingSeconds ?? totalSeconds);
-          setCurrentIndex(parsed.currentIndex ?? 0);
-        } else {
-          setRemainingSeconds(totalSeconds);
-        }
-
-        const qRes = await startExamQuestions(examId);
-        setQuestions(qRes.questions);
-      } catch (err: any) {
-        setError(getApiErrorMessage(err, "Failed to load exam questions."));
-      } finally {
-        setLoading(false);
+  const answeredCount = useMemo(() => {
+    return questions.filter((question) => {
+      if (question.question_type === "objective") {
+        return (objectiveAnswers[question.id]?.length ?? 0) > 0;
       }
-    }
+      return (descriptiveAnswers[question.id] ?? "").trim().length > 0;
+    }).length;
+  }, [questions, objectiveAnswers, descriptiveAnswers]);
 
-    load();
-  }, [examId, LOCAL_STORAGE_KEY]);
+  const reviewCount = useMemo(() => {
+    return Object.values(flaggedMap).filter(Boolean).length;
+  }, [flaggedMap]);
 
-  useEffect(() => {
-    if (remainingSeconds === null || loading || submitting || autoSubmitting) return;
-    
-    if (remainingSeconds <= 0) {
-      if (timerMode === "per_question" && currentIndex < questions.length - 1) {
-        // Auto-advance for per-question timer
-        setCurrentIndex((c) => c + 1);
-        setRemainingSeconds(questionTimeLimit);
-      } else {
-        // Full exam over, or last question of per_question finished
-        void handleSubmit(true);
-      }
-      return;
-    }
+  const pendingCount = useMemo(() => {
+    return Math.max(questions.length - answeredCount, 0);
+  }, [questions.length, answeredCount]);
 
-    const id = setInterval(() => {
-      setRemainingSeconds((s) => (s !== null && s > 0 ? s - 1 : 0));
-    }, 1000);
-
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remainingSeconds, loading, submitting, autoSubmitting, timerMode, currentIndex, questions.length, questionTimeLimit]);
-
-  useEffect(() => {
-    if (loading || remainingSeconds === null || typeof window === "undefined")
-      return;
-
-    localStorage.setItem(
-      LOCAL_STORAGE_KEY,
-      JSON.stringify({
-        answers,
-        flagged,
-        remainingSeconds,
-        currentIndex,
-      }),
+  const computeCurrentQuestionElapsed = useCallback(() => {
+    if (!currentQuestion) return 0;
+    return Math.max(
+      0,
+      Math.floor((Date.now() - questionEnterTimestampRef.current) / 1000),
     );
-  }, [answers, flagged, remainingSeconds, currentIndex, loading, LOCAL_STORAGE_KEY]);
+  }, [currentQuestion]);
+
+  const buildMergedTimeTakenMap = useCallback((): TimeTakenMap => {
+    if (!currentQuestion) return timeTakenMap;
+
+    const elapsedSeconds = computeCurrentQuestionElapsed();
+    return {
+      ...timeTakenMap,
+      [currentQuestion.id]: (timeTakenMap[currentQuestion.id] ?? 0) + elapsedSeconds,
+    };
+  }, [currentQuestion, timeTakenMap, computeCurrentQuestionElapsed]);
+
+  const syncCurrentQuestionTime = useCallback(() => {
+    if (!currentQuestion) return;
+
+    const elapsedSeconds = computeCurrentQuestionElapsed();
+    if (elapsedSeconds <= 0) return;
+
+    setTimeTakenMap((prev) => ({
+      ...prev,
+      [currentQuestion.id]: (prev[currentQuestion.id] ?? 0) + elapsedSeconds,
+    }));
+
+    questionEnterTimestampRef.current = Date.now();
+  }, [currentQuestion, computeCurrentQuestionElapsed]);
+
+  const stopTimer = useCallback(() => {
+    if (intervalRef.current != null) {
+      window.clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, []);
+
+  const startTimerLoop = useCallback(() => {
+    stopTimer();
+
+    intervalRef.current = window.setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          stopTimer();
+          return 0;
+        }
+        const next = prev - 1;
+        lastSyncedRemainingRef.current = next;
+        return next;
+      });
+    }, 1000);
+  }, [stopTimer]);
+
+  const handleSelectObjective = useCallback((questionId: string, optionId: string) => {
+    setObjectiveAnswers((prev) => ({
+      ...prev,
+      [questionId]: [optionId],
+    }));
+  }, []);
+
+  const handleDescriptiveChange = useCallback((questionId: string, value: string) => {
+    setDescriptiveAnswers((prev) => ({
+      ...prev,
+      [questionId]: value,
+    }));
+  }, []);
+
+  const handleToggleFlag = useCallback(() => {
+    if (!currentQuestion) return;
+
+    setFlaggedMap((prev) => ({
+      ...prev,
+      [currentQuestion.id]: !prev[currentQuestion.id],
+    }));
+  }, [currentQuestion]);
+
+  const goToQuestion = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= questions.length) return;
+      syncCurrentQuestionTime();
+      setCurrentIndex(index);
+      setError(null);
+    },
+    [questions.length, syncCurrentQuestionTime],
+  );
+
+  const hydrateFromStartResponse = useCallback((data: StartExamResponse) => {
+    setQuestions(data.questions);
+    setTimerMode(data.timer_mode);
+    setError(null);
+    autoSubmittedRef.current = false;
+
+    if (data.resume_payload) {
+      const restoredObjective: ObjectiveAnswerMap = {};
+      const restoredDescriptive: DescriptiveAnswerMap = {};
+
+      Object.entries(data.resume_payload.answers ?? {}).forEach(
+        ([questionId, value]) => {
+          const question = data.questions.find((q) => q.id === questionId);
+          if (!question) return;
+
+          if (question.question_type === "objective") {
+            restoredObjective[questionId] = value ? [value] : [];
+          } else {
+            restoredDescriptive[questionId] = value ?? "";
+          }
+        },
+      );
+
+      setObjectiveAnswers(restoredObjective);
+      setDescriptiveAnswers(restoredDescriptive);
+      setFlaggedMap(data.resume_payload.flagged ?? {});
+      setTimeTakenMap({});
+      setCurrentIndex(
+        Math.min(
+          data.resume_payload.current_index ?? 0,
+          Math.max(data.questions.length - 1, 0),
+        ),
+      );
+
+      const safeRemaining =
+        data.timer_mode === "full_exam" || data.timer_mode === "per_section"
+          ? data.resume_payload.remaining_seconds ?? 0
+          : data.question_time_seconds ?? 0;
+
+      setRemainingSeconds(safeRemaining);
+      lastSyncedRemainingRef.current = safeRemaining;
+    } else {
+      setObjectiveAnswers({});
+      setDescriptiveAnswers({});
+      setFlaggedMap({});
+      setTimeTakenMap({});
+      setCurrentIndex(0);
+
+      const initialRemaining =
+        data.timer_mode === "full_exam" || data.timer_mode === "per_section"
+          ? (data.total_duration_minutes ?? 0) * 60
+          : data.question_time_seconds ?? 0;
+
+      setRemainingSeconds(initialRemaining);
+      lastSyncedRemainingRef.current = initialRemaining;
+    }
+
+    questionEnterTimestampRef.current = Date.now();
+  }, []);
+
+  const loadExam = useCallback(async () => {
+    if (!examId) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await startExam(examId);
+      hydrateFromStartResponse(data);
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, "Failed to load exam."));
+    } finally {
+      setLoading(false);
+    }
+  }, [examId, hydrateFromStartResponse]);
+
+  const handleSubmitExam = useCallback(async () => {
+    if (!questions.length || !examId || submittingRef.current) return;
+
+    try {
+      setSubmitting(true);
+      setError(null);
+
+      const mergedTimeTakenMap = buildMergedTimeTakenMap();
+      setTimeTakenMap(mergedTimeTakenMap);
+      questionEnterTimestampRef.current = Date.now();
+
+      const payload = buildAnswerPayload(
+        questions,
+        objectiveAnswers,
+        descriptiveAnswers,
+        flaggedMap,
+        mergedTimeTakenMap,
+      );
+
+      await submitExamResponses(examId, payload);
+      allowNavigationRef.current = true;
+      stopTimer();
+      router.replace(`/exams/${examId}/result`);
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, "Failed to submit exam."));
+    } finally {
+      setSubmitting(false);
+      setShowLeaveModal(false);
+    }
+  }, [
+    questions,
+    examId,
+    objectiveAnswers,
+    descriptiveAnswers,
+    flaggedMap,
+    buildMergedTimeTakenMap,
+    router,
+    stopTimer,
+  ]);
+
+  const buildPausePayload = useCallback(() => {
+    const mergedAnswers: Record<string, string> = {};
+
+    Object.entries(objectiveAnswers).forEach(([questionId, selected]) => {
+      mergedAnswers[questionId] = selected?.[0] ?? "";
+    });
+
+    Object.entries(descriptiveAnswers).forEach(([questionId, value]) => {
+      mergedAnswers[questionId] = value;
+    });
+
+    return {
+      remaining_seconds: Math.max(0, lastSyncedRemainingRef.current || remainingSeconds),
+      current_index: currentIndex,
+      answers: mergedAnswers,
+      flagged: flaggedMap,
+    };
+  }, [
+    objectiveAnswers,
+    descriptiveAnswers,
+    remainingSeconds,
+    currentIndex,
+    flaggedMap,
+  ]);
+
+  const handlePauseExam = useCallback(async () => {
+    if (!examId || submittingRef.current) return;
+
+    try {
+      setSubmitting(true);
+      setError(null);
+      syncCurrentQuestionTime();
+
+      await pauseExam(examId, buildPausePayload());
+      allowNavigationRef.current = true;
+      stopTimer();
+      router.replace("/exams/history");
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, "Failed to pause exam."));
+    } finally {
+      setSubmitting(false);
+      setShowLeaveModal(false);
+    }
+  }, [examId, buildPausePayload, router, syncCurrentQuestionTime, stopTimer]);
+
+  const handleCancelExam = useCallback(async () => {
+    if (!examId || submittingRef.current) return;
+
+    try {
+      setSubmitting(true);
+      setError(null);
+      await cancelExam(examId);
+      allowNavigationRef.current = true;
+      stopTimer();
+      router.replace("/exams/history");
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, "Failed to cancel exam."));
+    } finally {
+      setSubmitting(false);
+      setShowLeaveModal(false);
+    }
+  }, [examId, router, stopTimer]);
+
+  const handleLeaveAction = useCallback(
+    async (action: LeaveAction) => {
+      if (action === "pause") {
+        await handlePauseExam();
+        return;
+      }
+
+      if (action === "cancel") {
+        await handleCancelExam();
+        return;
+      }
+
+      await handleSubmitExam();
+    },
+    [handlePauseExam, handleCancelExam, handleSubmitExam],
+  );
+
+  const closeLeaveModal = useCallback(() => {
+    setShowLeaveModal(false);
+    setPendingBackNavigation(false);
+  }, []);
 
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (submitting || autoSubmitting) return;
-      e.preventDefault();
-      e.returnValue = "";
+    loadExam();
+    return () => stopTimer();
+  }, [loadExam, stopTimer]);
+
+  useEffect(() => {
+    if (loading || !questions.length) return;
+    if (timerMode === "per_question") return;
+    startTimerLoop();
+    return () => stopTimer();
+  }, [loading, questions.length, timerMode, startTimerLoop, stopTimer]);
+
+  useEffect(() => {
+    if (
+      !loading &&
+      questions.length > 0 &&
+      remainingSeconds === 0 &&
+      !autoSubmittedRef.current &&
+      !submittingRef.current
+    ) {
+      autoSubmittedRef.current = true;
+      void handleSubmitExam();
+    }
+  }, [remainingSeconds, loading, questions.length, handleSubmitExam]);
+
+  useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      window.history.pushState({ examGuard: true }, "", window.location.href);
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowNavigationRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    const handlePopState = () => {
+      if (allowNavigationRef.current) return;
+      setPendingBackNavigation(true);
+      setShowLeaveModal(true);
+      window.history.pushState({ examGuard: true }, "", window.location.href);
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [submitting, autoSubmitting]);
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
 
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden && !submitting && !autoSubmitting) {
-        alert(
-          "Warning: Tab switching is not allowed during the exam. This action has been recorded.",
-        );
+    questionEnterTimestampRef.current = Date.now();
+  }, [currentIndex]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (showLeaveModal) return;
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        goToQuestion(currentIndex + 1);
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        goToQuestion(currentIndex - 1);
+      }
+
+      if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        handleToggleFlag();
       }
     };
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [submitting, autoSubmitting]);
-
-  function handleNext() {
-    if (currentIndex < questions.length - 1) {
-      setCurrentIndex((prev) => prev + 1);
-      if (timerMode === "per_question") {
-        setRemainingSeconds(questionTimeLimit);
-      }
-    }
-  }
-
-  async function handleSubmit(isAutoSubmit = false) {
-    if (submitting || autoSubmitting) return;
-
-    if (!isAutoSubmit) {
-      const confirmed = window.confirm(
-        "Are you sure you want to submit your exam? You cannot undo this action.",
-      );
-      if (!confirmed) return;
-      setSubmitting(true);
-    } else {
-      setAutoSubmitting(true);
-    }
-
-    setError(null);
-
-    try {
-      const payloadAnswers: QuestionResponseSubmitItem[] = questions.map((q) => {
-        const raw = answers[q.id];
-
-        if (q.question_type === "objective") {
-          return {
-            question_id: q.id,
-            question_type: "objective",
-            selected_option_ids: raw ? [String(raw)] : [],
-            descriptive_answer: null,
-            time_taken_seconds: null,
-            is_flagged_for_review: !!flagged[q.id],
-          };
-        }
-
-        return {
-          question_id: q.id,
-          question_type: "descriptive",
-          selected_option_ids: [],
-          descriptive_answer: raw ? String(raw) : "",
-          time_taken_seconds: null,
-          is_flagged_for_review: !!flagged[q.id],
-        };
-      });
-
-      await submitExamResponses(examId, { answers: payloadAnswers });
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
-      router.push(`/exams/${examId}/result`);
-    } catch (err: any) {
-      setError(getApiErrorMessage(err, "Failed to submit exam."));
-      setSubmitting(false);
-      setAutoSubmitting(false);
-    }
-  }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentIndex, showLeaveModal, goToQuestion, handleToggleFlag]);
 
   if (loading) {
     return (
-      <div className="p-8 flex justify-center mt-12 font-medium text-slate-600">
-        Loading exam environment...
+      <div className="min-h-screen bg-slate-50 px-6 py-10">
+        <div className="mx-auto max-w-7xl">
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <p className="text-sm text-slate-500">Loading exam...</p>
+          </div>
+        </div>
       </div>
     );
   }
 
-  if (error) {
-    return <div className="p-8 text-center text-red-600 font-medium">{error}</div>;
-  }
-
-  if (!questions.length) {
+  if (error && !questions.length) {
     return (
-      <div className="max-w-2xl mx-auto py-12 px-6 text-center border rounded-lg shadow-sm mt-12 bg-white">
-        <h2 className="text-2xl font-semibold mb-3 text-slate-800">
-          No questions found
-        </h2>
-        <p className="text-slate-600 mb-8">
-          We couldn&apos;t extract or generate any valid questions from the
-          provided document.
-        </p>
-        <button
-          onClick={() => router.push("/dashboard")}
-          className="px-6 py-2 bg-blue-600 text-white rounded"
-        >
-          Go to Dashboard
-        </button>
+      <div className="min-h-screen bg-slate-50 px-6 py-10">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-rose-200 bg-white p-8 shadow-sm">
+          <h1 className="text-xl font-semibold text-slate-900">
+            Unable to load exam
+          </h1>
+          <p className="mt-3 text-sm text-slate-600">{error}</p>
+          <button
+            onClick={loadExam}
+            className="mt-6 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
 
-  const currentQ = questions[currentIndex];
+  const currentQ = currentQuestion;
+
+  if (!currentQ) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-6 py-10">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h1 className="text-xl font-semibold text-slate-900">
+            No questions found
+          </h1>
+          <p className="mt-3 text-sm text-slate-600">
+            We couldn&apos;t load valid questions for this exam.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-6xl mx-auto py-6 px-4">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-slate-800">
-          {exam?.title ?? "Exam"}
-        </h1>
-        <div className="font-mono text-lg font-medium bg-slate-100 px-4 py-2 rounded shadow-sm border">
-          Time left:{" "}
-          <span
-            className={
-              remainingSeconds !== null && remainingSeconds < 300
-                ? "text-red-600 animate-pulse"
-                : "text-blue-700"
-            }
-          >
-            {remainingSeconds !== null &&
-              `${Math.floor(remainingSeconds / 60)
-                .toString()
-                .padStart(2, "0")}:${(remainingSeconds % 60)
-                .toString()
-                .padStart(2, "0")}`}
-          </span>
+    <div className="min-h-screen bg-slate-100">
+      <div className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-6 py-4">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900">
+              Exam Workspace
+            </h1>
+            <p className="text-sm text-slate-500">
+              Question {currentIndex + 1}/{questions.length}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
+              {formatTime(remainingSeconds)}
+            </div>
+            <button
+              onClick={() => setShowLeaveModal(true)}
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Exit options
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* FIXED: Added items-start so the sidebar doesn't stretch */}
-      <div className="flex flex-col md:flex-row gap-6 items-start">
-        
-        {/* Left Column Area */}
-        <div className="flex-1 w-full flex flex-col gap-4">
-          <div className="border rounded-lg p-6 bg-white shadow-sm flex-1">
-            <div className="flex justify-between mb-4 border-b pb-2">
-              <span className="font-semibold text-slate-700">
-                Question {currentIndex + 1} of {questions.length}
-              </span>
-              <span className="text-sm font-medium text-slate-500 uppercase tracking-wide bg-slate-100 px-2 py-1 rounded">
-                {currentQ.question_type}
-              </span>
-            </div>
+      <div className="mx-auto grid max-w-[1600px] grid-cols-1 gap-6 px-6 py-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <main className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-6 py-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-slate-500">
+                  Question {currentIndex + 1}
+                </p>
+                <h2 className="text-2xl font-semibold text-slate-900">
+                  {currentQ.question_type === "objective"
+                    ? "Multiple Choice"
+                    : "Descriptive"}
+                </h2>
+              </div>
 
-            <p className="font-medium text-lg mb-8 whitespace-pre-wrap leading-relaxed text-slate-800">
+              <button
+                onClick={handleToggleFlag}
+                className={`rounded-xl border px-4 py-2 text-sm font-medium ${
+                  flaggedMap[currentQ.id]
+                    ? "border-amber-300 bg-amber-50 text-amber-700"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {flaggedMap[currentQ.id] ? "Marked for review" : "Mark for review"}
+              </button>
+            </div>
+          </div>
+
+          <div className="px-6 py-8">
+            {error ? (
+              <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {error}
+              </div>
+            ) : null}
+
+            <p className="mb-8 whitespace-pre-wrap text-lg leading-8 text-slate-800">
               {currentQ.question_text}
             </p>
 
             {currentQ.question_type === "objective" ? (
-              <div className="space-y-3">
-                {currentQ.options.map((opt, i) => (
-                  <label
-                    key={opt.id ?? i}
-                    className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
-                      answers[currentQ.id] === opt.id
-                        ? "border-blue-500 bg-blue-50"
-                        : "hover:bg-slate-50 border-slate-200"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name={currentQ.id}
-                      value={opt.id}
-                      checked={answers[currentQ.id] === opt.id}
-                      onChange={() =>
-                        setAnswers((a) => ({ ...a, [currentQ.id]: opt.id }))
-                      }
-                      className="mt-1 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                    />
-                    <span className="leading-relaxed text-slate-700">
-                      {opt.text}
-                    </span>
-                  </label>
-                ))}
+              <div className="space-y-4">
+                {currentQ.options.map((option) => {
+                  const checked =
+                    (objectiveAnswers[currentQ.id] ?? []).includes(option.id);
+
+                  return (
+                    <label
+                      key={option.id}
+                      className={`flex cursor-pointer items-start gap-4 rounded-2xl border px-5 py-4 transition ${
+                        checked
+                          ? "border-emerald-300 bg-emerald-50"
+                          : "border-slate-200 bg-white hover:border-slate-300"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name={`question-${currentQ.id}`}
+                        checked={checked}
+                        onChange={() =>
+                          handleSelectObjective(currentQ.id, option.id)
+                        }
+                        className="mt-1 h-4 w-4"
+                      />
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Option
+                        </p>
+                        <p className="mt-1 text-base text-slate-800">
+                          {option.text}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             ) : (
-              <textarea
-                className="w-full border rounded-lg px-4 py-3 min-h-[200px] focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-y"
-                placeholder="Type your detailed answer here..."
-                value={answers[currentQ.id] ?? ""}
-                onChange={(e) =>
-                  setAnswers((a) => ({ ...a, [currentQ.id]: e.target.value }))
-                }
-              />
-            )}
-
-            <div className="mt-8 flex justify-between items-center border-t pt-4">
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 px-3 py-2 rounded transition-colors border border-transparent hover:border-slate-200">
-                <input
-                  type="checkbox"
-                  checked={!!flagged[currentQ.id]}
+              <div>
+                <textarea
+                  value={descriptiveAnswers[currentQ.id] ?? ""}
                   onChange={(e) =>
-                    setFlagged((prev) => ({
-                      ...prev,
-                      [currentQ.id]: e.target.checked,
-                    }))
+                    handleDescriptiveChange(currentQ.id, e.target.value)
                   }
-                  className="w-4 h-4 text-amber-500 border-slate-300 rounded focus:ring-amber-500 cursor-pointer"
+                  placeholder="Write your answer here..."
+                  className="min-h-[220px] w-full rounded-2xl border border-slate-300 bg-white px-4 py-4 text-base text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-900"
                 />
-                <span className="text-sm font-medium text-slate-700">
-                  Mark for Review
-                </span>
-              </label>
-
-              {currentQ.question_type === "objective" &&
-                answers[currentQ.id] !== undefined && (
-                  <button
-                    onClick={() => {
-                      setAnswers((prev) => {
-                        const newAnswers = { ...prev };
-                        delete newAnswers[currentQ.id];
-                        return newAnswers;
-                      });
-                    }}
-                    className="text-sm text-red-600 hover:text-red-700 font-medium px-4 py-2 hover:bg-red-50 rounded transition-colors"
-                  >
-                    Clear Selection
-                  </button>
-                )}
-            </div>
-          </div>
-
-          <div className="flex justify-between">
-            {/* FIXED: Hide Previous button in per_question mode */}
-            {timerMode !== "per_question" ? (
-              <button
-                onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
-                disabled={currentIndex === 0}
-                className="px-6 py-2.5 border border-slate-300 bg-white rounded-lg font-medium text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors shadow-sm"
-              >
-                Previous
-              </button>
-            ) : (
-              <div></div> /* Empty div to push Next button to the right */
+                <p className="mt-3 text-xs text-slate-500">
+                  Write clearly and keep your answer focused on the question.
+                </p>
+              </div>
             )}
-            
-            <button
-              onClick={handleNext}
-              disabled={currentIndex === questions.length - 1}
-              className="px-8 py-2.5 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors shadow-sm"
-            >
-              Next
-            </button>
           </div>
-        </div>
 
-        {/* Right Sidebar Area */}
-        <div className="w-full md:w-80 md:flex-shrink-0 lg:sticky lg:top-6">
-          <div className="border rounded-lg p-5 bg-white shadow-sm flex flex-col">
-            <h3 className="font-semibold text-slate-800 mb-4 border-b pb-3 flex-shrink-0">
-              Question Palette
-            </h3>
-
-            {/* FIXED: Hardcoded max-height and overflow to guarantee scrolling */}
-            <div 
-              className="grid grid-cols-5 gap-2.5 mb-6 overflow-y-auto p-1 scrollbar-thin scrollbar-thumb-slate-300"
-              style={{ maxHeight: '350px' }}
-            >
-              {questions.map((q, idx) => {
-                const hasAnswer =
-                  answers[q.id] !== undefined &&
-                  String(answers[q.id]).trim() !== "";
-                const isFlagged = !!flagged[q.id];
-                const isCurrent = idx === currentIndex;
-
-                let bgColor = "bg-slate-100 text-slate-600 hover:bg-slate-200";
-                
-                // Add muted style for disabled per_question mode items
-                if (timerMode === "per_question" && !isCurrent) {
-                  bgColor = "bg-slate-50 text-slate-400 opacity-60";
-                } else if (isFlagged) {
-                  bgColor = "bg-amber-500 text-white hover:bg-amber-600";
-                } else if (hasAnswer) {
-                  bgColor = "bg-green-500 text-white hover:bg-green-600";
-                }
-
-                return (
-                  <button
-                    key={q.id}
-                    onClick={() => {
-                      if (timerMode !== "per_question") {
-                        setCurrentIndex(idx);
-                      }
-                    }}
-                    disabled={timerMode === "per_question"}
-                    className={`w-full aspect-square flex items-center justify-center text-sm font-semibold rounded-md transition-all ${bgColor} ${
-                      isCurrent
-                        ? "ring-2 ring-blue-600 ring-offset-2 scale-110 shadow-md z-10 relative"
-                        : ""
-                    } ${timerMode === "per_question" && !isCurrent ? "cursor-not-allowed" : "cursor-pointer"}`}
-                  >
-                    {idx + 1}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="space-y-3 mb-6 text-sm font-medium text-slate-600 bg-slate-50 p-4 rounded-lg border border-slate-100 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 bg-green-500 rounded-sm shadow-sm"></div>
-                <span>Answered</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 bg-amber-500 rounded-sm shadow-sm"></div>
-                <span>Marked for Review</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 bg-slate-200 border border-slate-300 rounded-sm"></div>
-                <span>Not Answered</span>
-              </div>
-            </div>
-
+          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-5">
             <button
-              onClick={() => void handleSubmit(false)}
-              disabled={submitting || autoSubmitting}
-              className="w-full px-4 py-3.5 bg-emerald-600 text-white font-bold rounded-lg disabled:opacity-60 hover:bg-emerald-700 transition-colors shadow-sm flex-shrink-0"
+              onClick={() => goToQuestion(currentIndex - 1)}
+              disabled={currentIndex === 0}
+              className="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {submitting || autoSubmitting ? "Submitting..." : "Submit Exam"}
+              Previous
             </button>
-          </div>
-        </div>
 
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowLeaveModal(true)}
+                className="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700"
+              >
+                Pause / Exit
+              </button>
+
+              {currentIndex < questions.length - 1 ? (
+                <button
+                  onClick={() => goToQuestion(currentIndex + 1)}
+                  className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
+                >
+                  Next
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmitExam}
+                  disabled={submitting}
+                  className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  {submitting ? "Submitting..." : "Submit Exam"}
+                </button>
+              )}
+            </div>
+          </div>
+        </main>
+
+        <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-xl font-semibold text-slate-900">
+            Question Palette
+          </h3>
+
+          <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+              <div className="font-semibold text-slate-900">{answeredCount}</div>
+              <div className="text-xs text-slate-500">Answered</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+              <div className="font-semibold text-slate-900">{reviewCount}</div>
+              <div className="text-xs text-slate-500">Review</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+              <div className="font-semibold text-slate-900">{pendingCount}</div>
+              <div className="text-xs text-slate-500">Pending</div>
+            </div>
+          </div>
+
+          <div className="mt-6 grid max-h-[420px] grid-cols-5 gap-3 overflow-y-auto pr-1">
+            {questions.map((q, idx) => {
+              const isCurrent = idx === currentIndex;
+              const isAnswered =
+                q.question_type === "objective"
+                  ? (objectiveAnswers[q.id]?.length ?? 0) > 0
+                  : (descriptiveAnswers[q.id] ?? "").trim().length > 0;
+              const isFlagged = flaggedMap[q.id] ?? false;
+
+              let buttonClass =
+                "border-slate-200 bg-white text-slate-700 hover:border-slate-300";
+
+              if (isCurrent) {
+                buttonClass = "border-slate-900 bg-slate-900 text-white";
+              } else if (isFlagged) {
+                buttonClass = "border-amber-300 bg-amber-50 text-amber-700";
+              } else if (isAnswered) {
+                buttonClass = "border-emerald-300 bg-emerald-50 text-emerald-700";
+              }
+
+              return (
+                <button
+                  key={q.id}
+                  onClick={() => goToQuestion(idx)}
+                  className={`rounded-xl border px-0 py-3 text-sm font-medium transition ${buttonClass}`}
+                >
+                  {idx + 1}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-6 space-y-2 text-xs text-slate-500">
+            <p>
+              <span className="font-medium text-slate-700">Shortcuts:</span>{" "}
+              Left / Right arrows to move.
+            </p>
+            <p>
+              <span className="font-medium text-slate-700">Shortcut:</span>{" "}
+              Press F to mark review.
+            </p>
+          </div>
+
+          <button
+            onClick={handleSubmitExam}
+            disabled={submitting}
+            className="mt-6 w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {submitting ? "Submitting..." : "Submit Exam"}
+          </button>
+        </aside>
       </div>
+
+      {showLeaveModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="text-xl font-semibold text-slate-900">
+              Leave exam?
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              You can pause and resume from History, submit now, or cancel this
+              exam. Cancelling removes all attempt details and keeps only exam
+              metadata.
+            </p>
+
+            <div className="mt-6 grid gap-3">
+              <button
+                onClick={() => void handleLeaveAction("pause")}
+                disabled={submitting}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+              >
+                Pause Exam
+              </button>
+
+              <button
+                onClick={() => void handleLeaveAction("submit")}
+                disabled={submitting}
+                className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white"
+              >
+                Submit Exam
+              </button>
+
+              <button
+                onClick={() => void handleLeaveAction("cancel")}
+                disabled={submitting}
+                className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-medium text-white"
+              >
+                Cancel Exam
+              </button>
+
+              <button
+                onClick={closeLeaveModal}
+                disabled={submitting}
+                className="rounded-xl px-4 py-3 text-sm font-medium text-slate-500"
+              >
+                Continue Exam
+              </button>
+            </div>
+
+            {pendingBackNavigation ? (
+              <p className="mt-4 text-xs text-slate-400">
+                Back navigation was paused until you choose an action.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

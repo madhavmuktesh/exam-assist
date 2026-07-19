@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
-from typing import Any
+from typing import Literal, Optional
+
+
+ResultStatus = Literal["evaluated", "pending_review", "reviewed"]
 
 
 def result_document(
@@ -18,10 +21,10 @@ def result_document(
     descriptive_score: float,
     final_score: float,
     percentage: float,
-    status: str = "evaluated",
-    review_required: bool = True,
-    answer_breakdown: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+    status: ResultStatus = "evaluated",
+    review_required: bool = False,
+    answer_breakdown: Optional[list[dict]] = None,
+) -> dict:
     now = datetime.now(timezone.utc)
 
     return {

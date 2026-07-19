@@ -1,4 +1,8 @@
-import axios from "axios";
+import axios, { AxiosRequestHeaders, InternalAxiosRequestConfig } from "axios";
+
+type RetryableAxiosRequestConfig = InternalAxiosRequestConfig & {
+  _retry?: boolean;
+};
 
 const api = axios.create({
   baseURL:
@@ -10,7 +14,7 @@ api.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
     const token = localStorage.getItem("access_token");
     if (token) {
-      config.headers = config.headers ?? {};
+      config.headers = (config.headers ?? {}) as AxiosRequestHeaders;
       config.headers.Authorization = `Bearer ${token}`;
     }
   }
@@ -20,7 +24,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config;
+    const originalRequest = error.config as RetryableAxiosRequestConfig | undefined;
 
     if (!originalRequest) {
       return Promise.reject(error);
@@ -42,9 +46,12 @@ api.interceptors.response.use(
             const { access_token, refresh_token } = refreshRes.data;
 
             localStorage.setItem("access_token", access_token);
-            localStorage.setItem("refresh_token", refresh_token);
 
-            originalRequest.headers = originalRequest.headers ?? {};
+            if (refresh_token) {
+              localStorage.setItem("refresh_token", refresh_token);
+            }
+
+            originalRequest.headers = (originalRequest.headers ?? {}) as AxiosRequestHeaders;
             originalRequest.headers.Authorization = `Bearer ${access_token}`;
 
             return api(originalRequest);
@@ -54,11 +61,11 @@ api.interceptors.response.use(
             window.location.href = "/login";
             return Promise.reject(refreshError);
           }
-        } else {
-          localStorage.removeItem("access_token");
-          localStorage.removeItem("refresh_token");
-          window.location.href = "/login";
         }
+
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        window.location.href = "/login";
       }
     }
 

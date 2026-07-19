@@ -3,22 +3,26 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+
 ResultStatus = Literal["evaluated", "pending_review", "reviewed"]
 
 
 class AnswerBreakdownItem(BaseModel):
     question_id: str
-    question_type: str
+    question_type: Literal["objective", "descriptive"]
     question_text: str
+    options: Optional[list[dict[str, str]]] = None
+
     marks: float
     obtained_marks: float
     is_attempted: bool
     is_correct: Optional[bool]
     selected_option_ids: list[str]
     correct_option_ids: list[str]
-    descriptive_answer: Optional[str]
-    correct_answer_text: Optional[str]
-    explanation: Optional[str]
+
+    descriptive_answer: Optional[str] = None
+    correct_answer_text: Optional[str] = None
+    explanation: Optional[str] = None
     review_required: bool
     ai_feedback: Optional[str] = None
 

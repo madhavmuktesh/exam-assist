@@ -8,66 +8,162 @@ import { AuthModalContext } from "./layout";
 export default function UnifiedDashboardPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
-  
   const { openModal } = useContext(AuthModalContext);
 
   const handleRestrictedAction = (route: string) => {
     if (!loading && user) {
       router.push(route);
     } else {
-      // Just open the modal. When they log in, the page refreshes.
-      // They will have to click the button again manually.
       openModal();
     }
   };
 
   return (
-    <div className="max-w-6xl w-full mx-auto p-6 md:p-10 flex flex-col gap-10">
-      
-      {/* APP INFO SECTION */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
-        <h2 className="text-3xl font-extrabold text-slate-900 mb-4">Welcome to Exam Assistant</h2>
-        <p className="text-lg text-slate-600 mb-8 max-w-3xl leading-relaxed">
-          Your personal workspace for AI-powered exam generation. Upload any course material, syllabus, or existing question paper in PDF format. Our AI automatically extracts existing questions or generates brand new ones based on your custom difficulty settings.
-        </p>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-blue-50/50 p-5 rounded-xl border border-blue-100">
-            <h3 className="font-bold text-blue-900 mb-2">1. Upload Content</h3>
-            <p className="text-sm text-slate-600">Provide a PDF of your textbook or a past question paper.</p>
+    <div className="max-w-6xl w-full mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="grid gap-8 p-8 lg:grid-cols-[1.5fr_1fr] lg:p-10">
+          <div className="space-y-5">
+            <div className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600">
+              Smart exam creation and review
+            </div>
+
+            <div className="space-y-3">
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                Welcome to Exam Assistant
+              </h1>
+              <p className="max-w-3xl text-base leading-7 text-slate-600 sm:text-lg">
+                Build AI-powered exams from course PDFs or existing question papers,
+                control timing and difficulty, and review detailed results from one
+                clean workspace.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={() => handleRestrictedAction("/exams/create")}
+                className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-700"
+              >
+                Create exam
+              </button>
+
+              <button
+                onClick={() => handleRestrictedAction("/history")}
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                View history
+              </button>
+            </div>
           </div>
-          <div className="bg-blue-50/50 p-5 rounded-xl border border-blue-100">
-            <h3 className="font-bold text-blue-900 mb-2">2. AI Extraction</h3>
-            <p className="text-sm text-slate-600">We securely process the text and generate a structured exam.</p>
-          </div>
-          <div className="bg-blue-50/50 p-5 rounded-xl border border-blue-100">
-            <h3 className="font-bold text-blue-900 mb-2">3. Take Exam</h3>
-            <p className="text-sm text-slate-600">Run timed tests and review detailed scoring instantly.</p>
+
+          <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                01
+              </p>
+              <h3 className="mt-2 text-base font-bold text-slate-800">
+                Upload content
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Provide a textbook PDF, syllabus, or question paper as the source.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                02
+              </p>
+              <h3 className="mt-2 text-base font-bold text-slate-800">
+                Prepare questions
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Generate new questions or extract existing ones with custom settings.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                03
+              </p>
+              <h3 className="mt-2 text-base font-bold text-slate-800">
+                Review results
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Check scores, answer breakdowns, feedback, and exam history.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* ACTION BUTTONS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <button 
+      <section className="grid gap-6 md:grid-cols-2">
+        <button
           onClick={() => handleRestrictedAction("/exams/create")}
-          className="group flex flex-col items-center justify-center p-12 bg-white rounded-2xl border-2 border-dashed border-slate-300 hover:border-blue-500 hover:bg-blue-50 transition-all text-center cursor-pointer shadow-sm"
+          className="group rounded-2xl border border-slate-200 bg-white p-8 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
         >
-          <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-3xl mb-4 group-hover:scale-110 transition-transform">+</div>
-          <h3 className="text-2xl font-bold text-slate-800">Create Exam</h3>
-          <p className="text-slate-500 mt-2">Generate a new test from your documents.</p>
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-2xl text-slate-700 transition-colors group-hover:bg-slate-800 group-hover:text-white">
+            +
+          </div>
+          <h2 className="mt-5 text-2xl font-bold text-slate-800">Create Exam</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Start a new exam workflow using AI generation or PDF-based extraction.
+          </p>
+          <div className="mt-6 inline-flex items-center text-sm font-medium text-slate-800">
+            Open exam builder
+          </div>
         </button>
 
-        <button 
+        <button
           onClick={() => handleRestrictedAction("/history")}
-          className="group flex flex-col items-center justify-center p-12 bg-white rounded-2xl border-2 border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all text-center cursor-pointer shadow-sm"
+          className="group rounded-2xl border border-slate-200 bg-white p-8 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
         >
-          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-2xl mb-4 group-hover:scale-110 transition-transform">📊</div>
-          <h3 className="text-2xl font-bold text-slate-800">View History</h3>
-          <p className="text-slate-500 mt-2">Review your past scores and performance.</p>
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-2xl text-slate-700 transition-colors group-hover:bg-slate-800 group-hover:text-white">
+            📊
+          </div>
+          <h2 className="mt-5 text-2xl font-bold text-slate-800">View History</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Revisit completed exams, performance summaries, and past result pages.
+          </p>
+          <div className="mt-6 inline-flex items-center text-sm font-medium text-slate-800">
+            Open history
+          </div>
         </button>
-      </div>
+      </section>
 
+      <section className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Authentication</p>
+          <p className="mt-2 text-lg font-bold text-slate-800">
+            {loading ? "Checking..." : user ? "Signed in" : "Guest mode"}
+          </p>
+          <p className="mt-2 text-sm text-slate-600">
+            {loading
+              ? "Verifying your session."
+              : user
+              ? `Welcome back, ${user.full_name ?? user.email}.`
+              : "Sign in to create exams and access your history."}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Exam workflow</p>
+          <p className="mt-2 text-lg font-bold text-slate-800">
+            Generate or extract
+          </p>
+          <p className="mt-2 text-sm text-slate-600">
+            Use content PDFs for AI-generated exams or question papers for extraction.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Results</p>
+          <p className="mt-2 text-lg font-bold text-slate-800">
+            Instant review
+          </p>
+          <p className="mt-2 text-sm text-slate-600">
+            Track scores, percentages, question review, and descriptive feedback.
+          </p>
+        </div>
+      </section>
     </div>
   );
 }

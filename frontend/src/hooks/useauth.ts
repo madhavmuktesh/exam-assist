@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getMe, logout as logoutFn } from "@/features/auth/api";
+import { getMe, logout as logoutFn, type AuthMeResponse } from "@/features/auth/api";
 
 export interface AuthUser {
   id?: string;
   email: string;
   full_name?: string;
   phone_number?: string;
+  is_active?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -29,7 +30,7 @@ export function useAuth() {
           return;
         }
 
-        const data = await getMe();
+        const data: AuthMeResponse = await getMe();
         setUser(data);
       } catch {
         setUser(null);

@@ -182,6 +182,7 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     "question_id": question_id,
                     "question_type": question_type,
                     "question_text": question["question_text"],
+                    "options": question.get("options", []),  # ADDED OPTIONS HERE
                     "marks": marks,
                     "obtained_marks": obtained_marks,
                     "is_attempted": is_attempted,
@@ -225,6 +226,7 @@ def score_exam(questions: list[dict], responses_map: dict[str, dict]) -> dict:
                     "question_id": question_id,
                     "question_type": question_type,
                     "question_text": question["question_text"],
+                    "options": question.get("options", []),  # ADDED OPTIONS HERE
                     "marks": marks,
                     "obtained_marks": obtained_marks,
                     "is_attempted": is_attempted,

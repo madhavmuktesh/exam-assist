@@ -15,6 +15,7 @@ from app.schemas.response import (
 from app.schemas.result import ResultResponse
 from app.services.scoring_service import score_exam
 
+
 router = APIRouter(prefix="/responses", tags=["responses"])
 
 
@@ -61,16 +62,16 @@ def serialize_result(item: dict) -> dict:
     }
 
 
-def serialize_history_item(result_item: dict, exam_item: dict | None) -> dict:
+def serialize_history_item(exam_item: dict, result_item: dict | None) -> dict:
     return {
-        "exam_id": str(result_item["exam_id"]),
-        "exam_title": exam_item["title"] if exam_item else "Untitled Exam",
-        "final_score": result_item["final_score"],
-        "max_marks": result_item["max_marks"],
-        "percentage": result_item["percentage"],
-        "status": result_item["status"],
-        "created_at": result_item["created_at"],
-        "updated_at": result_item["updated_at"],
+        "exam_id": str(exam_item["_id"]),
+        "exam_title": exam_item.get("title", "Untitled Exam"),
+        "final_score": result_item.get("final_score") if result_item else None,
+        "max_marks": result_item.get("max_marks") if result_item else None,
+        "percentage": result_item.get("percentage") if result_item else None,
+        "status": exam_item.get("status", "draft"),
+        "created_at": exam_item["created_at"],
+        "updated_at": exam_item["updated_at"],
     }
 
 
@@ -173,7 +174,6 @@ def submit_exam(
     )
 
     responses_map = {str(item["question_id"]): item for item in stored_responses}
-
     scoring = score_exam(questions, responses_map)
 
     db.results.delete_many(
@@ -210,7 +210,12 @@ def submit_exam(
                 "status": "submitted",
                 "submitted_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
-            }
+            },
+            "$unset": {
+                "paused_at": "",
+                "resumed_at": "",
+                "attempt_snapshot": "",
+            },
         },
     )
 
@@ -223,28 +228,37 @@ def get_exam_history(current_user: dict = Depends(get_current_user)):
     db = get_database()
     user_id = str(current_user["_id"])
 
-    results = list(
-        db.results.find({"user_id": user_id}).sort("created_at", -1)
+    exams = list(
+        db.exams.find(
+            {
+                "user_id": user_id,
+                "is_active": True,
+                "status": {
+                    "$in": ["paused", "cancelled", "submitted", "evaluated"]
+                },
+            }
+        ).sort("updated_at", -1)
     )
 
-    if not results:
+    if not exams:
         return {"history": []}
 
-    exam_ids = []
-    for item in results:
-        exam_id = item.get("exam_id")
-        if exam_id and ObjectId.is_valid(exam_id):
-            exam_ids.append(ObjectId(exam_id))
+    exam_id_strings = [str(exam["_id"]) for exam in exams]
 
-    exams = list(
-        db.exams.find({"_id": {"$in": exam_ids}})
-    ) if exam_ids else []
+    results = list(
+        db.results.find(
+            {
+                "user_id": user_id,
+                "exam_id": {"$in": exam_id_strings},
+            }
+        )
+    )
 
-    exam_map = {str(exam["_id"]): exam for exam in exams}
+    result_map = {result["exam_id"]: result for result in results}
 
     history = [
-        serialize_history_item(item, exam_map.get(str(item["exam_id"])))
-        for item in results
+        serialize_history_item(exam, result_map.get(str(exam["_id"])))
+        for exam in exams
     ]
 
     return {"history": history}
@@ -290,3 +304,38 @@ def get_exam_result(
         )
 
     return serialize_result(result)
+
+
+@router.delete("/exam/{exam_id}/result", status_code=status.HTTP_204_NO_CONTENT)
+def delete_exam_result(
+    exam_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    db = get_database()
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
+
+    delete_result = db.results.delete_one(
+        {
+            "exam_id": str(exam["_id"]),
+            "user_id": str(current_user["_id"]),
+        }
+    )
+
+    if delete_result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Result not found for this exam",
+        )
+
+    db.exams.update_one(
+        {"_id": exam["_id"]},
+        {
+            "$set": {
+                "status": "draft",
+                "updated_at": datetime.now(timezone.utc),
+            },
+            "$unset": {
+                "submitted_at": "",
+            },
+        },
+    )

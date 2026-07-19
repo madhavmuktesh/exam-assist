@@ -8,6 +8,19 @@ export type QuestionPreparationMode =
   | "generate_from_content"
   | "extract_existing_questions";
 
+export type ExamStatus =
+  | "draft"
+  | "ready"
+  | "in_progress"
+  | "paused"
+  | "cancelled"
+  | "submitted"
+  | "evaluated"
+  | "reviewed"
+  | "pending_review";
+
+export type ResultStatus = "evaluated" | "pending_review" | "reviewed";
+
 export interface SectionTimer {
   section_name: string;
   duration_minutes: number;
@@ -48,7 +61,7 @@ export interface ExamResponse {
   total_duration_minutes: number | null;
   section_timers: SectionTimer[];
   question_time_seconds: number | null;
-  status: string;
+  status: ExamStatus;
   generation_status: string;
   is_active: boolean;
   created_at: string;
@@ -56,6 +69,9 @@ export interface ExamResponse {
   prepared_at: string | null;
   started_at: string | null;
   submitted_at: string | null;
+  paused_at?: string | null;
+  resumed_at?: string | null;
+  cancelled_at?: string | null;
 }
 
 export interface PaginatedExamListResponse {
@@ -74,19 +90,45 @@ export interface StudentQuestionOption {
 
 export interface StudentQuestion {
   id: string;
-  exam_id: string;
-  question_type: QuestionType;
   question_text: string;
-  question_order: number;
+  question_type: QuestionType;
   marks: number;
   options: StudentQuestionOption[];
-  section_name?: string | null;
-  difficulty?: string | null;
-  time_limit_seconds?: number | null;
 }
 
-export interface StudentQuestionListResponse {
+export interface ResumePayload {
+  remaining_seconds: number;
+  current_index: number;
+  answers: Record<string, string>;
+  flagged: Record<string, boolean>;
+}
+
+export interface StartExamResponse {
+  exam_id: string;
+  timer_mode: TimerMode;
+  total_duration_minutes: number | null;
+  question_time_seconds: number | null;
+  status: ExamStatus;
+  resume_payload: ResumePayload | null;
   questions: StudentQuestion[];
+}
+
+export interface PauseExamPayload {
+  remaining_seconds: number;
+  current_index: number;
+  answers: Record<string, string>;
+  flagged: Record<string, boolean>;
+}
+
+export interface PauseExamResponse {
+  message: string;
+  exam_id: string;
+  status: ExamStatus;
+  paused_at: string;
+}
+
+export interface CancelExamResponse {
+  message: string;
 }
 
 export interface QuestionResponseSubmitItem {
@@ -156,7 +198,7 @@ export interface ExamResultResponse {
   descriptive_score: number;
   final_score: number;
   percentage: number;
-  status: string;
+  status: ResultStatus;
   review_required: boolean;
   answer_breakdown: AnswerBreakdownItem[];
   created_at: string;
@@ -166,10 +208,10 @@ export interface ExamResultResponse {
 export interface ExamHistoryItem {
   exam_id: string;
   exam_title: string;
-  final_score: number;
-  max_marks: number;
-  percentage: number;
-  status: string;
+  final_score: number | null;
+  max_marks: number | null;
+  percentage: number | null;
+  status: ExamStatus;
   created_at: string;
   updated_at: string;
 }
@@ -200,12 +242,26 @@ export async function getExam(examId: string): Promise<ExamResponse> {
   return res.data;
 }
 
-export async function startExamQuestions(
+export async function startExam(examId: string): Promise<StartExamResponse> {
+  const res = await api.post<StartExamResponse>(`/exams/${examId}/start`);
+  return res.data;
+}
+
+export async function pauseExam(
   examId: string,
-): Promise<StudentQuestionListResponse> {
-  const res = await api.get<StudentQuestionListResponse>(
-    `/questions/exam/${examId}/start`,
+  payload: PauseExamPayload,
+): Promise<PauseExamResponse> {
+  const res = await api.post<PauseExamResponse>(
+    `/exams/${examId}/pause`,
+    payload,
   );
+  return res.data;
+}
+
+export async function cancelExam(
+  examId: string,
+): Promise<CancelExamResponse> {
+  const res = await api.post<CancelExamResponse>(`/exams/${examId}/cancel`);
   return res.data;
 }
 
@@ -239,4 +295,8 @@ export async function getExamResult(
 export async function getExamHistory(): Promise<ExamHistoryResponse> {
   const res = await api.get<ExamHistoryResponse>("/responses/history");
   return res.data;
+}
+
+export async function deleteExamResult(examId: string): Promise<void> {
+  await api.delete(`/responses/exam/${examId}/result`);
 }

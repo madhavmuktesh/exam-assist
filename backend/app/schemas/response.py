@@ -3,6 +3,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+
 QuestionType = Literal["objective", "descriptive"]
 
 
@@ -57,9 +58,9 @@ class ResponseListResponse(BaseModel):
 class ExamHistoryItem(BaseModel):
     exam_id: str
     exam_title: str
-    final_score: float
-    max_marks: float
-    percentage: float
+    final_score: Optional[float] = None
+    max_marks: Optional[float] = None
+    percentage: Optional[float] = None
     status: str
     created_at: datetime
     updated_at: datetime

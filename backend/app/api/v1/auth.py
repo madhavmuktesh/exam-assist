@@ -25,6 +25,7 @@ from app.schemas.auth import (
     Token,
     UserResponse,
 )
+from app.schemas.auth import UserUpdateProfileRequest, ChangePasswordRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -177,3 +178,94 @@ def reset_password(payload: ResetPasswordRequest, db=Depends(get_database)):
 @router.get("/me", response_model=UserResponse)
 def me(current_user: dict = Depends(get_current_user)):
     return serialize_user(current_user)
+
+@router.put("/me", response_model=UserResponse)
+def update_profile(
+    payload: UserUpdateProfileRequest, 
+    current_user: dict = Depends(get_current_user), 
+    db=Depends(get_database)
+):
+    """Update logged-in user's profile information (name, phone)."""
+    update_data = {}
+    
+    if payload.full_name is not None:
+        update_data["full_name"] = payload.full_name
+        
+    if payload.phone_number is not None:
+        # Check if the new phone number is already taken by someone else
+        if payload.phone_number != current_user.get("phone_number"):
+            existing_phone = db.users.find_one({"phone_number": payload.phone_number.strip()})
+            if existing_phone:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Phone number already registered to another account."
+                )
+        update_data["phone_number"] = payload.phone_number
+
+    if not update_data:
+        return serialize_user(current_user)
+
+    update_data["updated_at"] = datetime.now(timezone.utc)
+
+    db.users.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": update_data}
+    )
+
+    updated_user = db.users.find_one({"_id": current_user["_id"]})
+    return serialize_user(updated_user)
+
+
+@router.put("/me/password", status_code=status.HTTP_200_OK)
+def change_password(
+    payload: ChangePasswordRequest, 
+    current_user: dict = Depends(get_current_user), 
+    db=Depends(get_database)
+):
+    """Change password for a logged-in user."""
+    # 1. Verify the current password is correct
+    if not verify_password(payload.current_password, current_user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect current password.",
+        )
+
+    # 2. Prevent setting the new password to the exact same current password
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password.",
+        )
+
+    # 3. Hash and update
+    db.users.update_one(
+        {"_id": current_user["_id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(payload.new_password),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        }
+    )
+
+    return {"message": "Password updated successfully."}
+
+
+@router.delete("/me", status_code=status.HTTP_200_OK)
+def delete_account(
+    current_user: dict = Depends(get_current_user), 
+    db=Depends(get_database)
+):
+    """Permanently delete the logged-in user's account and all associated data."""
+    user_id_str = str(current_user["_id"])
+    
+    # 1. (Optional but recommended) Delete cascading user data to prevent orphaned records
+    db.exams.delete_many({"user_id": user_id_str})
+    db.questions.delete_many({"user_id": user_id_str})
+    db.responses.delete_many({"user_id": user_id_str})
+    db.results.delete_many({"user_id": user_id_str})
+    
+    # 2. Delete the actual user record
+    db.users.delete_one({"_id": current_user["_id"]})
+    
+    return {"message": "Account and all associated data deleted successfully."}

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -34,6 +35,7 @@ class Token(BaseModel):
     refresh_token: str 
     token_type: str
 
+
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
@@ -47,7 +49,6 @@ class UserResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-# Add these at the bottom of backend/app/schemas/auth.py
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -65,6 +66,25 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=6, max_length=72)
 
     @field_validator("new_password")
+    @classmethod
+    def validate_password_length(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 bytes")
+        return value
+
+
+# --- Profile Update & Settings Schemas ---
+
+class UserUpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    phone_number: Optional[str] = Field(default=None, min_length=10, max_length=20)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=6, max_length=72)
+    new_password: str = Field(..., min_length=6, max_length=72)
+
+    @field_validator("current_password", "new_password")
     @classmethod
     def validate_password_length(cls, value: str) -> str:
         if len(value.encode("utf-8")) > 72:

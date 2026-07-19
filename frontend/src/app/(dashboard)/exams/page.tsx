@@ -3,16 +3,24 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listExams } from "@/features/exams/api";
-import type { ExamListResponse, ExamResponse } from "@/features/exams/api";
+import type {
+  ExamResponse,
+  PaginatedExamListResponse,
+} from "@/features/exams/api";
 
 function statusLabel(exam: ExamResponse) {
   switch (exam.status) {
     case "submitted":
+    case "evaluated":
       return "Completed";
-    case "started":
+    case "in_progress":
       return "In progress";
-    case "prepared":
+    case "paused":
+      return "Paused";
+    case "ready":
       return "Ready";
+    case "cancelled":
+      return "Cancelled";
     default:
       return "Draft";
   }
@@ -22,29 +30,50 @@ function generationBadge(exam: ExamResponse) {
   switch (exam.generation_status) {
     case "completed":
       return (
-        <span className="px-2 py-1 text-xs rounded bg-green-100 text-green-700">
+        <span className="rounded bg-green-100 px-2 py-1 text-xs text-green-700">
           Questions ready
         </span>
       );
     case "failed":
       return (
-        <span className="px-2 py-1 text-xs rounded bg-red-100 text-red-700">
+        <span className="rounded bg-red-100 px-2 py-1 text-xs text-red-700">
           Generation failed
         </span>
       );
     case "not_applicable":
       return (
-        <span className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-700">
+        <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-700">
           Manual questions
         </span>
       );
     default:
       return (
-        <span className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700">
-          Generating…
+        <span className="rounded bg-yellow-100 px-2 py-1 text-xs text-yellow-700">
+          Generating...
         </span>
       );
   }
+}
+
+function getExamActionHref(exam: ExamResponse) {
+  if (exam.status === "paused" || exam.status === "in_progress") {
+    return `/exams/${exam.id}/start`;
+  }
+
+  if (exam.status === "submitted" || exam.status === "evaluated") {
+    return `/exams/${exam.id}/result`;
+  }
+
+  return `/exams/${exam.id}/ready`;
+}
+
+function getExamActionLabel(exam: ExamResponse) {
+  if (exam.status === "paused") return "Resume";
+  if (exam.status === "in_progress") return "Continue";
+  if (exam.status === "submitted" || exam.status === "evaluated") {
+    return "View result";
+  }
+  return "Open";
 }
 
 export default function ExamsPage() {
@@ -55,7 +84,7 @@ export default function ExamsPage() {
   useEffect(() => {
     async function load() {
       try {
-        const res: ExamListResponse = await listExams();
+        const res: PaginatedExamListResponse = await listExams();
         setExams(res.exams);
       } catch (err: any) {
         console.error("Load exams error:", err?.response?.data ?? err);
@@ -68,6 +97,7 @@ export default function ExamsPage() {
         setLoading(false);
       }
     }
+
     load();
   }, []);
 
@@ -77,11 +107,11 @@ export default function ExamsPage() {
   if (!exams.length) {
     return (
       <div className="p-8">
-        <h1 className="text-xl font-semibold mb-4">Your exams</h1>
+        <h1 className="mb-4 text-xl font-semibold">Your exams</h1>
         <p>No exams created yet.</p>
         <Link
           href="/exams/create"
-          className="mt-4 inline-block px-4 py-2 bg-blue-600 text-white rounded"
+          className="mt-4 inline-block rounded bg-blue-600 px-4 py-2 text-white"
         >
           Create an exam
         </Link>
@@ -90,18 +120,18 @@ export default function ExamsPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto py-8 space-y-6">
-      <div className="flex justify-between items-center">
+    <div className="mx-auto max-w-4xl space-y-6 py-8">
+      <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Your exams</h1>
         <Link
           href="/exams/create"
-          className="px-4 py-2 bg-blue-600 text-white rounded"
+          className="rounded bg-blue-600 px-4 py-2 text-white"
         >
           New exam
         </Link>
       </div>
 
-      <div className="border rounded overflow-hidden">
+      <div className="overflow-hidden rounded border">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -134,10 +164,10 @@ export default function ExamsPage() {
                 </td>
                 <td className="px-4 py-2">
                   <Link
-                    href={`/exams/${exam.id}/ready`}
+                    href={getExamActionHref(exam)}
                     className="text-blue-600 hover:underline"
                   >
-                    Open
+                    {getExamActionLabel(exam)}
                   </Link>
                 </td>
               </tr>

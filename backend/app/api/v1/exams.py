@@ -7,17 +7,30 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.api.deps import get_current_user
 from app.core.database import get_database
 from app.models.exam import exam_document
-from app.services.question_service import prepare_questions_for_exam_from_pdf
 from app.schemas.exam import (
+    ExamCancelResponse,
     ExamCreateRequest,
-    ExamListResponse,
+    ExamPauseRequest,
+    ExamPauseResponse,
     ExamResponse,
     ExamUpdateRequest,
     PaginatedExamListResponse,
+    StartExamResponse,
 )
+from app.services.question_service import prepare_questions_for_exam_from_pdf
 
 router = APIRouter(prefix="/exams", tags=["exams"])
 
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+def ensure_utc_aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 def serialize_exam(exam: dict) -> dict:
     return {
@@ -32,7 +45,7 @@ def serialize_exam(exam: dict) -> dict:
         "difficulty": exam["difficulty"],
         "objective_count": exam["objective_count"],
         "descriptive_count": exam["descriptive_count"],
-        "total_questions": exam["total_questions"],
+        "total_questions": exam.get("total_questions", 0),
         "options_count": exam["options_count"],
         "timer_mode": exam["timer_mode"],
         "total_duration_minutes": exam.get("total_duration_minutes"),
@@ -46,6 +59,66 @@ def serialize_exam(exam: dict) -> dict:
         "prepared_at": exam.get("prepared_at"),
         "started_at": exam.get("started_at"),
         "submitted_at": exam.get("submitted_at"),
+        "paused_at": exam.get("paused_at"),
+        "resumed_at": exam.get("resumed_at"),
+        "cancelled_at": exam.get("cancelled_at"),
+    }
+
+
+def serialize_student_question(question: dict) -> dict:
+    return {
+        "id": str(question["_id"]),
+        "question_text": question["question_text"],
+        "question_type": question["question_type"],
+        "marks": question.get("marks", 1.0),
+        "options": [
+            {"id": str(opt["id"]), "text": opt["text"]}
+            for opt in question.get("options", [])
+        ],
+    }
+
+
+def get_exam_or_404(db, exam_id: str, user_id: str):
+    if not ObjectId.is_valid(exam_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid exam id",
+        )
+
+    exam = db.exams.find_one(
+        {"_id": ObjectId(exam_id), "user_id": user_id, "is_active": True}
+    )
+
+    if not exam:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Exam not found",
+        )
+
+    return exam
+
+
+def build_resume_payload_for_exam(exam: dict):
+    now = datetime.now(timezone.utc)
+
+    last_active_at = ensure_utc_aware(
+        exam.get("resumed_at")
+        or exam.get("paused_at")
+        or exam.get("started_at")
+        or exam.get("updated_at")
+    )
+
+    remaining_seconds = exam.get("remaining_seconds", 0)
+
+    if last_active_at is not None:
+        elapsed_seconds = max(0, int((now - last_active_at).total_seconds()))
+        remaining_seconds = max(0, remaining_seconds - elapsed_seconds)
+
+    return {
+        "remaining_seconds": remaining_seconds,
+        "current_index": exam.get("current_index", 0),
+        "answers": exam.get("answers", {}),
+        "flagged": exam.get("flagged", {}),
     }
 
 @router.post("", response_model=ExamResponse, status_code=status.HTTP_201_CREATED)
@@ -53,68 +126,8 @@ def create_exam(
     payload: ExamCreateRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Create an exam and:
-    - If source_type='pdf', try to auto-generate questions from the PDF.
-    - Otherwise, mark generation_status as 'not_applicable'.
-    """
     db = get_database()
 
-    # ---- Basic logical validations ----
-    total_requested_questions = payload.objective_count + payload.descriptive_count
-    if total_requested_questions <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You must request at least one question (objective + descriptive > 0).",
-        )
-
-    if payload.options_count < 2 or payload.options_count > 6:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="options_count must be between 2 and 6.",
-        )
-
-    # Source-specific validation
-    if payload.source_type == "pdf" and not payload.pdf_filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="pdf_filename is required for pdf-based exams.",
-        )
-
-    if payload.source_type == "topic" and not payload.topic_name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="topic_name is required for topic-based exams.",
-        )
-
-    # Timer-specific validation
-    if payload.timer_mode == "full_exam":
-        if payload.total_duration_minutes is None or payload.total_duration_minutes <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="total_duration_minutes must be positive for 'full_exam' timer mode.",
-            )
-
-    if payload.timer_mode == "per_section":
-        if not payload.section_timers:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="section_timers must be provided for 'per_section' timer mode.",
-            )
-        if any(st.duration_minutes <= 0 for st in payload.section_timers):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Each section timer duration_minutes must be positive.",
-            )
-
-    if payload.timer_mode == "per_question":
-        if payload.question_time_seconds is None or payload.question_time_seconds <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="question_time_seconds must be positive for 'per_question' timer mode.",
-            )
-
-    # ---- Build initial exam document (0 total_questions; will update after generation) ----
     new_exam = exam_document(
         user_id=str(current_user["_id"]),
         title=payload.title,
@@ -145,14 +158,12 @@ def create_exam(
     total_questions = 0
     prepared_at = None
 
-    # Decide whether generation applies at all
     if exam["source_type"] != "pdf":
         generation_status = "not_applicable"
     else:
-        # Default to failed; will set to completed if generation succeeds
         generation_status = "failed"
         try:
-            if exam["pdf_filename"]:
+            if exam.get("pdf_filename"):
                 uploads_dir = Path("uploads")
                 pdf_path = uploads_dir / exam["pdf_filename"]
 
@@ -175,7 +186,7 @@ def create_exam(
 
                 total_questions = num_questions
                 generation_status = "completed"
-                prepared_at = datetime.now(timezone.utc)
+                prepared_at = utc_now()
         except HTTPException:
             raise
         except Exception as e:
@@ -184,7 +195,7 @@ def create_exam(
                 {
                     "$set": {
                         "generation_status": "failed",
-                        "updated_at": datetime.now(timezone.utc),
+                        "updated_at": utc_now(),
                     }
                 },
             )
@@ -193,7 +204,10 @@ def create_exam(
                 detail=f"Question generation failed: {str(e)}",
             )
 
-    # ---- Update exam with generation info and total_questions ----
+    status_value = (
+        "ready" if generation_status in {"completed", "not_applicable"} else "draft"
+    )
+
     db.exams.update_one(
         {"_id": exam["_id"]},
         {
@@ -201,7 +215,8 @@ def create_exam(
                 "total_questions": total_questions,
                 "generation_status": generation_status,
                 "prepared_at": prepared_at,
-                "updated_at": datetime.now(timezone.utc),
+                "status": status_value,
+                "updated_at": utc_now(),
             }
         },
     )
@@ -220,12 +235,11 @@ def list_exams(
 
     query = {"user_id": str(current_user["_id"]), "is_active": True}
     total = db.exams.count_documents(query)
-
     skip = (page - 1) * limit
 
     exams = list(
         db.exams.find(query)
-        .sort("created_at", -1)
+        .sort("updated_at", -1)
         .skip(skip)
         .limit(limit)
     )
@@ -243,23 +257,7 @@ def list_exams(
 @router.get("/{exam_id}", response_model=ExamResponse)
 def get_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
     db = get_database()
-
-    if not ObjectId.is_valid(exam_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid exam id",
-        )
-
-    exam = db.exams.find_one(
-        {"_id": ObjectId(exam_id), "user_id": str(current_user["_id"]), "is_active": True}
-    )
-
-    if not exam:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Exam not found",
-        )
-
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
     return serialize_exam(exam)
 
 
@@ -270,65 +268,245 @@ def update_exam(
     current_user: dict = Depends(get_current_user),
 ):
     db = get_database()
-
-    if not ObjectId.is_valid(exam_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid exam id",
-        )
-
-    exam = db.exams.find_one(
-        {"_id": ObjectId(exam_id), "user_id": str(current_user["_id"]), "is_active": True}
-    )
-
-    if not exam:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Exam not found",
-        )
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 
     update_data = payload.model_dump(exclude_none=True)
 
     if update_data:
-        update_data["updated_at"] = datetime.now(timezone.utc)
+        update_data["updated_at"] = utc_now()
+        db.exams.update_one({"_id": exam["_id"]}, {"$set": update_data})
 
-        db.exams.update_one(
-            {"_id": ObjectId(exam_id)},
-            {"$set": update_data},
-        )
-
-    updated_exam = db.exams.find_one({"_id": ObjectId(exam_id)})
+    updated_exam = db.exams.find_one({"_id": exam["_id"]})
     return serialize_exam(updated_exam)
 
 
 @router.delete("/{exam_id}", status_code=status.HTTP_200_OK)
 def delete_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
     db = get_database()
-
-    if not ObjectId.is_valid(exam_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid exam id",
-        )
-
-    exam = db.exams.find_one(
-        {"_id": ObjectId(exam_id), "user_id": str(current_user["_id"]), "is_active": True}
-    )
-
-    if not exam:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Exam not found",
-        )
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 
     db.exams.update_one(
-        {"_id": ObjectId(exam_id)},
+        {"_id": exam["_id"]},
         {
             "$set": {
                 "is_active": False,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": utc_now(),
             }
         },
     )
 
     return {"message": "Exam deleted successfully"}
+
+
+@router.post("/{exam_id}/start", response_model=StartExamResponse)
+def start_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
+    db = get_database()
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
+
+    current_status = exam.get("status")
+    now = utc_now()
+    resume_payload = None
+
+    if current_status == "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cancelled exams cannot be started again.",
+        )
+
+    if current_status == "submitted":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Submitted exams cannot be started again.",
+        )
+
+    if current_status == "draft":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Exam is not ready yet.",
+        )
+
+    if current_status in ["ready", "evaluated", "reviewed", "pending_review"]:
+        initial_remaining_seconds = 0
+        if exam.get("timer_mode") in {"full_exam", "per_section"}:
+            initial_remaining_seconds = int((exam.get("total_duration_minutes") or 0) * 60)
+        elif exam.get("timer_mode") == "per_question":
+            initial_remaining_seconds = int(exam.get("question_time_seconds") or 0)
+
+        db.exams.update_one(
+            {"_id": exam["_id"]},
+            {
+                "$set": {
+                    "status": "in_progress",
+                    "started_at": exam.get("started_at") or now,
+                    "resumed_at": now,
+                    "updated_at": now,
+                    "attempt_snapshot": {
+                        "remaining_seconds": initial_remaining_seconds,
+                        "current_index": 0,
+                        "answers": {},
+                        "flagged": {},
+                    },
+                },
+                "$unset": {
+                    "cancelled_at": "",
+                    "paused_at": "",
+                },
+            },
+        )
+        exam = db.exams.find_one({"_id": exam["_id"]})
+        resume_payload = build_resume_payload_for_exam(exam)
+
+    elif current_status == "paused":
+        resume_payload = build_resume_payload_for_exam(exam)
+
+        db.exams.update_one(
+            {"_id": exam["_id"]},
+            {
+                "$set": {
+                    "status": "in_progress",
+                    "resumed_at": now,
+                    "updated_at": now,
+                },
+                "$unset": {
+                    "paused_at": "",
+                },
+            },
+        )
+        exam = db.exams.find_one({"_id": exam["_id"]})
+        resume_payload = build_resume_payload_for_exam(exam)
+
+    elif current_status == "in_progress":
+        resume_payload = build_resume_payload_for_exam(exam)
+
+        if resume_payload and resume_payload["remaining_seconds"] <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Exam time is over. Submit the exam.",
+            )
+
+        db.exams.update_one(
+            {"_id": exam["_id"]},
+            {
+                "$set": {
+                    "resumed_at": now,
+                    "updated_at": now,
+                    "attempt_snapshot.remaining_seconds": (
+                        resume_payload["remaining_seconds"] if resume_payload else 0
+                    ),
+                }
+            },
+        )
+        exam = db.exams.find_one({"_id": exam["_id"]})
+        resume_payload = build_resume_payload_for_exam(exam)
+
+    raw_questions = list(
+        db.questions.find(
+            {
+                "exam_id": str(exam["_id"]),
+                "user_id": str(current_user["_id"]),
+                "is_active": True,
+            }
+        ).sort("question_order", 1)
+    )
+
+    if not raw_questions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No questions found for this exam. Generation may have failed.",
+        )
+
+    student_questions = [serialize_student_question(q) for q in raw_questions]
+
+    return {
+        "exam_id": str(exam["_id"]),
+        "timer_mode": exam["timer_mode"],
+        "total_duration_minutes": exam.get("total_duration_minutes"),
+        "question_time_seconds": exam.get("question_time_seconds"),
+        "status": exam["status"],
+        "resume_payload": resume_payload,
+        "questions": student_questions,
+    }
+
+
+@router.post("/{exam_id}/pause", response_model=ExamPauseResponse)
+def pause_exam(
+    exam_id: str,
+    payload: ExamPauseRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    db = get_database()
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
+
+    if exam.get("status") not in ["in_progress", "paused"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only in-progress exams can be paused.",
+        )
+
+    paused_at = utc_now()
+
+    safe_remaining_seconds = max(0, int(payload.remaining_seconds or 0))
+
+    db.exams.update_one(
+        {"_id": exam["_id"]},
+        {
+            "$set": {
+                "status": "paused",
+                "paused_at": paused_at,
+                "updated_at": paused_at,
+                "attempt_snapshot": {
+                    "remaining_seconds": safe_remaining_seconds,
+                    "current_index": payload.current_index,
+                    "answers": payload.answers,
+                    "flagged": payload.flagged,
+                },
+            }
+        },
+    )
+
+    return {
+        "message": "Exam paused successfully",
+        "exam_id": str(exam["_id"]),
+        "status": "paused",
+        "paused_at": paused_at,
+    }
+
+
+@router.post("/{exam_id}/cancel", response_model=ExamCancelResponse)
+def cancel_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
+    db = get_database()
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
+
+    if exam.get("status") not in ["draft", "ready", "in_progress", "paused"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This exam cannot be cancelled in its current state.",
+        )
+
+    db.responses.delete_many(
+        {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
+    )
+    db.results.delete_many(
+        {"exam_id": str(exam["_id"]), "user_id": str(current_user["_id"])}
+    )
+
+    cancelled_at = utc_now()
+
+    db.exams.update_one(
+        {"_id": exam["_id"]},
+        {
+            "$set": {
+                "status": "cancelled",
+                "cancelled_at": cancelled_at,
+                "updated_at": cancelled_at,
+            },
+            "$unset": {
+                "submitted_at": "",
+                "paused_at": "",
+                "resumed_at": "",
+                "attempt_snapshot": "",
+            },
+        },
+    )
+
+    return {"message": "Exam cancelled successfully"}

@@ -12,8 +12,28 @@ export interface RegisterPayload {
   phone_number: string;
 }
 
-export async function login(payload: LoginPayload) {
-  const res = await api.post("/auth/login", {
+export interface AuthMeResponse {
+  id: string;
+  email: string;
+  full_name?: string;
+  phone_number?: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AuthTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  token_type?: string;
+}
+
+export interface RefreshTokenPayload {
+  refresh_token: string;
+}
+
+export async function login(payload: LoginPayload): Promise<AuthTokenResponse> {
+  const res = await api.post<AuthTokenResponse>("/auth/login", {
     email: payload.email,
     password: payload.password,
   });
@@ -41,8 +61,8 @@ export async function register(payload: RegisterPayload) {
   return res.data;
 }
 
-export async function getMe() {
-  const res = await api.get("/auth/me");
+export async function getMe(): Promise<AuthMeResponse> {
+  const res = await api.get<AuthMeResponse>("/auth/me");
   return res.data;
 }
 
