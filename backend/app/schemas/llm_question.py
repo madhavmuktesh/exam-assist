@@ -8,24 +8,31 @@ QuestionType = Literal["objective", "descriptive"]
 
 class LLMQuestionOption(BaseModel):
     id: str = Field(..., min_length=1, max_length=5)
-    text: str = Field(..., min_length=1, max_length=500)
+    text: str = Field(..., min_length=1, max_length=5000)
 
 
 class LLMGeneratedQuestion(BaseModel):
     question_type: QuestionType
     question_text: str = Field(..., min_length=5, max_length=5000)
     question_order: int = Field(..., ge=1, le=1000)
-    marks: float = Field(..., gt=0, le=100)
+
+    # Allow float but > 0 so you can generate 1, 1.5, 2, 5, etc.
+    # The sanitizer will set a default before validation.
+    marks: float = Field(default=1.0, gt=0, le=100)
 
     options: list[LLMQuestionOption] = Field(default_factory=list)
     correct_option_ids: list[str] = Field(default_factory=list)
+
+    # For descriptive, this is required; for objective it must be None.
+    # Default helps when the LLM omits it.
     correct_answer_text: Optional[str] = Field(default=None, max_length=5000)
+
     explanation: Optional[str] = Field(default=None, max_length=5000)
 
     section_name: Optional[str] = Field(default=None, max_length=100)
     difficulty: Optional[str] = Field(default=None, max_length=30)
     source_chunk_ids: list[str] = Field(default_factory=list)
-    time_limit_seconds: Optional[int] = Field(default=None, ge=10, le=7200)
+    time_limit_seconds: Optional[int] = Field(default=45, ge=10, le=7200)
 
     @model_validator(mode="after")
     def validate_question(self):
@@ -45,6 +52,9 @@ class LLMGeneratedQuestion(BaseModel):
                 raise ValueError("Descriptive questions cannot have options")
             if self.correct_option_ids:
                 raise ValueError("Descriptive questions cannot have correct_option_ids")
+            # If descriptive and still None, force a default before validator completes.
+            if self.correct_answer_text is None:
+                self.correct_answer_text = "Refer to the source content."
 
         return self
 

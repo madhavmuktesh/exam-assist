@@ -28,10 +28,16 @@ function formatTime(totalSeconds: number): string {
   const seconds = safeSeconds % 60;
 
   if (hours > 0) {
-    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+      2,
+      "0"
+    )}:${String(seconds).padStart(2, "0")}`;
   }
 
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(
+    2,
+    "0"
+  )}`;
 }
 
 function getApiErrorMessage(error: any, fallback: string): string {
@@ -55,7 +61,7 @@ function buildAnswerPayload(
   objectiveAnswers: ObjectiveAnswerMap,
   descriptiveAnswers: DescriptiveAnswerMap,
   flaggedMap: FlaggedMap,
-  timeTakenMap: TimeTakenMap,
+  timeTakenMap: TimeTakenMap
 ): ExamSubmitRequest {
   const answers: QuestionResponseSubmitItem[] = questions.map((question) => ({
     question_id: question.id,
@@ -88,7 +94,8 @@ export default function TakeExamPage() {
   const [perQuestionDuration, setPerQuestionDuration] = useState(60);
 
   const [objectiveAnswers, setObjectiveAnswers] = useState<ObjectiveAnswerMap>({});
-  const [descriptiveAnswers, setDescriptiveAnswers] = useState<DescriptiveAnswerMap>({});
+  const [descriptiveAnswers, setDescriptiveAnswers] =
+    useState<DescriptiveAnswerMap>({});
   const [flaggedMap, setFlaggedMap] = useState<FlaggedMap>({});
   const [timeTakenMap, setTimeTakenMap] = useState<TimeTakenMap>({});
 
@@ -106,6 +113,7 @@ export default function TakeExamPage() {
   const timerHasStartedRef = useRef(false);
   const fetchInProgressRef = useRef(false);
   const autoAdvancingRef = useRef(false);
+  const lastAutoAdvancedQuestionRef = useRef<string | null>(null);
 
   const currentQuestion = questions[currentIndex] ?? null;
   const isPerQuestionMode = timerMode === "per_question";
@@ -135,7 +143,7 @@ export default function TakeExamPage() {
     if (!currentQuestion) return 0;
     return Math.max(
       0,
-      Math.floor((Date.now() - questionEnterTimestampRef.current) / 1000),
+      Math.floor((Date.now() - questionEnterTimestampRef.current) / 1000)
     );
   }, [currentQuestion]);
 
@@ -232,7 +240,7 @@ export default function TakeExamPage() {
       setCurrentIndex(index);
       setError(null);
     },
-    [questions.length, isPerQuestionMode, currentIndex, syncCurrentQuestionTime],
+    [questions.length, isPerQuestionMode, currentIndex, syncCurrentQuestionTime]
   );
 
   const hydrateFromStartResponse = useCallback((data: StartExamResponse) => {
@@ -245,11 +253,10 @@ export default function TakeExamPage() {
     autoSubmittedRef.current = false;
     timerHasStartedRef.current = false;
     autoAdvancingRef.current = false;
+    lastAutoAdvancedQuestionRef.current = null;
 
     const resolvedPerQuestionDuration =
-      data.question_time_seconds ??
-      (data as any).exam?.question_time_seconds ??
-      60;
+      data.question_time_seconds ?? (data as any).exam?.question_time_seconds ?? 60;
 
     setPerQuestionDuration(resolvedPerQuestionDuration);
 
@@ -279,7 +286,7 @@ export default function TakeExamPage() {
 
       const resumeIndex = Math.min(
         data.resume_payload!.current_index ?? 0,
-        Math.max(resolvedQuestions.length - 1, 0),
+        Math.max(resolvedQuestions.length - 1, 0)
       );
 
       setCurrentIndex(resumeIndex);
@@ -290,7 +297,9 @@ export default function TakeExamPage() {
         safeRemaining =
           resolvedTimerMode === "per_question"
             ? resolvedPerQuestionDuration
-            : (data.total_duration_minutes ?? (data as any).exam?.total_duration_minutes ?? 60) * 60;
+            : (data.total_duration_minutes ??
+                (data as any).exam?.total_duration_minutes ??
+                60) * 60;
       }
 
       setRemainingSeconds(safeRemaining);
@@ -354,7 +363,7 @@ export default function TakeExamPage() {
         objectiveAnswers,
         descriptiveAnswers,
         flaggedMap,
-        mergedTimeTakenMap,
+        mergedTimeTakenMap
       );
 
       await submitExamResponses(examId, payload);
@@ -447,7 +456,7 @@ export default function TakeExamPage() {
       }
       await handleSubmitExam();
     },
-    [handlePauseExam, handleCancelExam, handleSubmitExam],
+    [handlePauseExam, handleCancelExam, handleSubmitExam]
   );
 
   const closeLeaveModal = useCallback(() => {
@@ -476,6 +485,7 @@ export default function TakeExamPage() {
     setRemainingSeconds(perQuestionDuration);
     lastSyncedRemainingRef.current = perQuestionDuration;
     questionEnterTimestampRef.current = Date.now();
+    autoAdvancingRef.current = false;
 
     startTimerLoop();
     return () => stopTimer();
@@ -492,41 +502,49 @@ export default function TakeExamPage() {
 
   useEffect(() => {
     if (
-      !loading &&
-      questions.length > 0 &&
-      remainingSeconds === 0 &&
-      timerHasStartedRef.current &&
-      !submittingRef.current
+      loading ||
+      !questions.length ||
+      remainingSeconds !== 0 ||
+      !timerHasStartedRef.current ||
+      submittingRef.current
     ) {
-      if (timerMode === "per_question") {
-        if (autoAdvancingRef.current) return;
+      return;
+    }
 
-        autoAdvancingRef.current = true;
-        syncCurrentQuestionTime();
+    if (timerMode === "per_question") {
+      if (!currentQuestion) return;
 
-        const isLastQuestion = currentIndex >= questions.length - 1;
-
-        if (isLastQuestion) {
-          autoSubmittedRef.current = true;
-          void handleSubmitExam();
-          return;
-        }
-
-        moveToNextQuestion();
-        autoAdvancingRef.current = false;
+      if (lastAutoAdvancedQuestionRef.current === currentQuestion.id) {
         return;
       }
 
-      if (!autoSubmittedRef.current) {
-        autoSubmittedRef.current = true;
-        void handleSubmitExam();
+      lastAutoAdvancedQuestionRef.current = currentQuestion.id;
+      syncCurrentQuestionTime();
+
+      const isLastQuestion = currentIndex >= questions.length - 1;
+
+      if (isLastQuestion) {
+        if (!autoSubmittedRef.current) {
+          autoSubmittedRef.current = true;
+          void handleSubmitExam();
+        }
+        return;
       }
+
+      moveToNextQuestion();
+      return;
+    }
+
+    if (!autoSubmittedRef.current) {
+      autoSubmittedRef.current = true;
+      void handleSubmitExam();
     }
   }, [
     remainingSeconds,
     loading,
     questions.length,
     timerMode,
+    currentQuestion,
     currentIndex,
     syncCurrentQuestionTime,
     moveToNextQuestion,
@@ -563,6 +581,7 @@ export default function TakeExamPage() {
 
   useEffect(() => {
     questionEnterTimestampRef.current = Date.now();
+    autoAdvancingRef.current = false;
   }, [currentIndex]);
 
   useEffect(() => {
@@ -590,14 +609,23 @@ export default function TakeExamPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentIndex, showLeaveModal, submitting, isPerQuestionMode, goToQuestion, handleToggleFlag]);
+  }, [
+    currentIndex,
+    showLeaveModal,
+    submitting,
+    isPerQuestionMode,
+    goToQuestion,
+    handleToggleFlag,
+  ]);
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 px-6 py-10 flex items-center justify-center">
         <div className="mx-auto max-w-md w-full rounded-2xl border border-slate-200 bg-white p-8 shadow-sm text-center space-y-4">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-slate-800 border-t-transparent"></div>
-          <p className="text-sm font-medium text-slate-600">Loading your exam session...</p>
+          <p className="text-sm font-medium text-slate-600">
+            Loading your exam session...
+          </p>
         </div>
       </div>
     );
@@ -670,7 +698,9 @@ export default function TakeExamPage() {
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span className="text-base font-semibold text-slate-800">Submitting exam responses...</span>
+            <span className="text-base font-semibold text-slate-800">
+              Submitting exam responses...
+            </span>
           </div>
         </div>
       )}
@@ -684,11 +714,13 @@ export default function TakeExamPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className={`rounded-xl px-4 py-2 text-sm font-bold shadow-xs transition-colors ${
-              isLowTime
-                ? "bg-rose-600 text-white animate-pulse"
-                : "bg-slate-900 text-white"
-            }`}>
+            <div
+              className={`rounded-xl px-4 py-2 text-sm font-bold shadow-xs transition-colors ${
+                isLowTime
+                  ? "bg-rose-600 text-white animate-pulse"
+                  : "bg-slate-900 text-white"
+              }`}
+            >
               ⏱️ {formatTime(remainingSeconds)}
             </div>
             <button
@@ -712,7 +744,9 @@ export default function TakeExamPage() {
                     Question {currentIndex + 1}
                   </p>
                   <h2 className="text-2xl font-semibold text-slate-900">
-                    {currentQ.question_type === "objective" ? "Multiple Choice" : "Descriptive"}
+                    {currentQ.question_type === "objective"
+                      ? "Multiple Choice"
+                      : "Descriptive"}
                   </h2>
                 </div>
                 <button
@@ -724,7 +758,9 @@ export default function TakeExamPage() {
                       : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  {flaggedMap[currentQ.id] ? "★ Marked for review" : "☆ Mark for review"}
+                  {flaggedMap[currentQ.id]
+                    ? "★ Marked for review"
+                    : "☆ Mark for review"}
                 </button>
               </div>
             </div>
@@ -743,7 +779,9 @@ export default function TakeExamPage() {
               {currentQ.question_type === "objective" ? (
                 <div className="space-y-4">
                   {currentQ.options.map((option) => {
-                    const checked = (objectiveAnswers[currentQ.id] ?? []).includes(option.id);
+                    const checked = (objectiveAnswers[currentQ.id] ?? []).includes(
+                      option.id
+                    );
                     return (
                       <label
                         key={option.id}
@@ -776,12 +814,15 @@ export default function TakeExamPage() {
                   <textarea
                     value={descriptiveAnswers[currentQ.id] ?? ""}
                     disabled={submitting}
-                    onChange={(e) => handleDescriptiveChange(currentQ.id, e.target.value)}
+                    onChange={(e) =>
+                      handleDescriptiveChange(currentQ.id, e.target.value)
+                    }
                     placeholder="Write your answer clearly here..."
                     className="min-h-[220px] w-full rounded-2xl border border-slate-300 bg-white px-4 py-4 text-base text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 disabled:bg-slate-50"
                   />
                   <p className="mt-3 text-xs text-slate-500">
-                    Write concisely and keep your answer focused on the question prompt.
+                    Write concisely and keep your answer focused on the question
+                    prompt.
                   </p>
                 </div>
               )}
@@ -855,10 +896,17 @@ export default function TakeExamPage() {
                   : (descriptiveAnswers[q.id] ?? "").trim().length > 0;
               const isFlagged = flaggedMap[q.id] ?? false;
 
-              let buttonClass = "border-slate-200 bg-white text-slate-700 hover:border-slate-300";
-              if (isCurrent) buttonClass = "border-slate-900 bg-slate-900 text-white font-bold ring-2 ring-slate-900 ring-offset-1";
-              else if (isFlagged) buttonClass = "border-amber-300 bg-amber-50 text-amber-800 font-semibold";
-              else if (isAnswered) buttonClass = "border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold";
+              let buttonClass =
+                "border-slate-200 bg-white text-slate-700 hover:border-slate-300";
+              if (isCurrent)
+                buttonClass =
+                  "border-slate-900 bg-slate-900 text-white font-bold ring-2 ring-slate-900 ring-offset-1";
+              else if (isFlagged)
+                buttonClass =
+                  "border-amber-300 bg-amber-50 text-amber-800 font-semibold";
+              else if (isAnswered)
+                buttonClass =
+                  "border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold";
 
               return (
                 <button
@@ -877,19 +925,31 @@ export default function TakeExamPage() {
             {isPerQuestionMode ? (
               <>
                 <p>
-                  <span className="font-medium text-slate-700">Mode:</span> Per-question timer is active.
+                  <span className="font-medium text-slate-700">Mode:</span> Per-question
+                  timer is active.
                 </p>
                 <p>
-                  <span className="font-medium text-slate-700">Navigation:</span> Only forward flow is allowed.
+                  <span className="font-medium text-slate-700">Navigation:</span> Only
+                  forward flow is allowed.
                 </p>
                 <p>
-                  <span className="font-medium text-slate-700">Time:</span> Each question gets {perQuestionDuration} seconds.
+                  <span className="font-medium text-slate-700">Time:</span> Each question
+                  gets {perQuestionDuration} seconds.
                 </p>
               </>
             ) : (
               <>
-                <p><span className="font-medium text-slate-700">Shortcuts:</span> Left / Right arrows to move.</p>
-                <p><span className="font-medium text-slate-700">Shortcut:</span> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono">F</kbd> to mark review.</p>
+                <p>
+                  <span className="font-medium text-slate-700">Shortcuts:</span> Left /
+                  Right arrows to move.
+                </p>
+                <p>
+                  <span className="font-medium text-slate-700">Shortcut:</span> Press{" "}
+                  <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono">
+                    F
+                  </kbd>{" "}
+                  to mark review.
+                </p>
               </>
             )}
           </div>
@@ -908,9 +968,12 @@ export default function TakeExamPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 backdrop-blur-xs px-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl space-y-6">
             <div>
-              <h3 className="text-xl font-semibold text-slate-900">Leave exam workspace?</h3>
+              <h3 className="text-xl font-semibold text-slate-900">
+                Leave exam workspace?
+              </h3>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                You can pause your progress and resume later from your History, submit your responses now, or cancel the attempt.
+                You can pause your progress and resume later from your History,
+                submit your responses now, or cancel the attempt.
               </p>
             </div>
             <div className="grid gap-3">

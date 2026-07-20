@@ -1,5 +1,6 @@
 import json
 import re
+from typing import Any
 
 from openai import OpenAI
 from pydantic import ValidationError
@@ -7,17 +8,16 @@ from pydantic import ValidationError
 from app.core.config import get_settings
 from app.schemas.llm_question import LLMGeneratedQuestionSet
 
-
 settings = get_settings()
+
 
 def clean_json_response(raw_string: str) -> str:
     """Removes markdown fences around JSON outputs from LLMs."""
     text = raw_string.strip()
-    # Remove starting ```json or ```
     text = re.sub(r"^```(?:json)?\s*\n", "", text, flags=re.IGNORECASE)
-    # Remove ending ```
     text = re.sub(r"\n```\s*$", "", text)
     return text.strip()
+
 
 client = OpenAI(
     api_key=settings.openrouter_api_key,
@@ -85,7 +85,9 @@ Return valid JSON only in this format:
 
 Rules:
 - Objective questions must include exactly {options_count} options.
+- Every objective question must include at least 1 correct option in `correct_option_ids`.
 - Descriptive questions must have no options and no correct_option_ids.
+- Every question must include `marks`.
 - Use question_order starting from 1.
 - Marks should be 1 for objective and 5 for descriptive unless strongly justified.
 - correct_answer_text must be null for objective questions.
@@ -132,12 +134,251 @@ Rules:
 - If a question has options, mark it as "objective". Extract up to {options_count} options.
 - If a question has no options, mark it as "descriptive".
 - If the text contains an answer key (e.g., "Ans.(C)", "Answer: A"), put that letter in `correct_option_ids`.
+- Every question must include `marks`.
 - Maintain the original wording of the questions as closely as possible.
 - Do not include markdown fences. Return JSON only.
 
 Source material:
 {text}
 """.strip()
+
+
+def _normalize_option_id(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().upper()
+
+
+def _sanitize_question(
+    question: dict[str, Any],
+    index: int,
+    options_count: int,
+    difficulty: str,
+) -> dict[str, Any] | None:
+    if not isinstance(question, dict):
+        return None
+
+    question_type = str(question.get("question_type", "")).strip().lower()
+    if question_type not in {"objective", "descriptive"}:
+        question_type = "objective" if question.get("options") else "descriptive"
+
+    question_text = str(question.get("question_text", "")).strip()
+    if not question_text:
+        return None
+
+    marks = question.get("marks")
+    if marks in (None, ""):
+        marks = 1 if question_type == "objective" else 5
+    try:
+        marks = float(marks)
+    except (TypeError, ValueError):
+        marks = 1.0 if question_type == "objective" else 5.0
+
+    question_order = question.get("question_order", index + 1)
+    try:
+        question_order = int(question_order)
+    except (TypeError, ValueError):
+        question_order = index + 1
+
+    time_limit_seconds = question.get("time_limit_seconds", 45)
+    try:
+        time_limit_seconds = int(time_limit_seconds)
+    except (TypeError, ValueError):
+        time_limit_seconds = 45
+
+    explanation = str(question.get("explanation") or "").strip()
+    if not explanation:
+        explanation = "Generated from source content."
+
+    section_name = str(question.get("section_name") or "").strip()
+    if not section_name:
+        section_name = "Objective" if question_type == "objective" else "Descriptive"
+
+    source_chunk_ids = question.get("source_chunk_ids")
+    if not isinstance(source_chunk_ids, list):
+        source_chunk_ids = []
+
+    sanitized: dict[str, Any] = {
+        "question_type": question_type,
+        "question_text": question_text,
+        "question_order": question_order,
+        "marks": marks,
+        "options": [],
+        "correct_option_ids": [],
+        "correct_answer_text": None,
+        "explanation": explanation,
+        "section_name": section_name,
+        "difficulty": difficulty,
+        "source_chunk_ids": source_chunk_ids,
+        "time_limit_seconds": time_limit_seconds,
+    }
+
+    if question_type == "objective":
+        raw_options = question.get("options") or []
+        if not isinstance(raw_options, list):
+            return None
+
+        cleaned_options = []
+        for opt_index, opt in enumerate(raw_options[:options_count]):
+            if not isinstance(opt, dict):
+                continue
+
+            opt_text = str(opt.get("text", "")).strip()
+            if not opt_text:
+                continue
+
+            raw_id = opt.get("id")
+            option_id = _normalize_option_id(raw_id) or chr(65 + opt_index)
+
+            cleaned_options.append({
+                "id": option_id,
+                "text": opt_text,
+            })
+
+        if len(cleaned_options) != options_count:
+            return None
+
+        allowed_ids = {opt["id"] for opt in cleaned_options}
+        raw_correct_ids = question.get("correct_option_ids") or []
+
+        if not isinstance(raw_correct_ids, list):
+            raw_correct_ids = [raw_correct_ids]
+
+        cleaned_correct_ids = []
+        for cid in raw_correct_ids:
+            normalized = _normalize_option_id(cid)
+            if normalized in allowed_ids and normalized not in cleaned_correct_ids:
+                cleaned_correct_ids.append(normalized)
+
+        if len(cleaned_correct_ids) < 1:
+            return None
+
+        sanitized["options"] = cleaned_options
+        sanitized["correct_option_ids"] = cleaned_correct_ids
+        sanitized["correct_answer_text"] = None
+
+    else:
+        answer_text = question.get("correct_answer_text")
+        sanitized["options"] = []
+        sanitized["correct_option_ids"] = []
+        sanitized["correct_answer_text"] = (
+            str(answer_text).strip()
+            if answer_text not in (None, "")
+            else "Refer to the source content."
+        )
+
+    return sanitized
+
+
+def _sanitize_question_set(
+    parsed: dict[str, Any],
+    options_count: int,
+    difficulty: str,
+) -> dict[str, Any]:
+    raw_questions = parsed.get("questions", [])
+    if not isinstance(raw_questions, list):
+        raw_questions = []
+
+    cleaned_questions = []
+    for index, question in enumerate(raw_questions):
+        cleaned = _sanitize_question(
+            question=question,
+            index=index,
+            options_count=options_count,
+            difficulty=difficulty,
+        )
+        if cleaned:
+            cleaned_questions.append(cleaned)
+
+    for idx, question in enumerate(cleaned_questions, start=1):
+        question["question_order"] = idx
+
+    return {"questions": cleaned_questions}
+
+
+def _validate_question_set(
+    parsed: dict[str, Any],
+    options_count: int,
+    difficulty: str,
+) -> LLMGeneratedQuestionSet:
+    sanitized = _sanitize_question_set(
+        parsed=parsed,
+        options_count=options_count,
+        difficulty=difficulty,
+    )
+    return LLMGeneratedQuestionSet.model_validate(sanitized)
+
+
+def _chat_completion_with_schema(
+    messages: list[dict[str, str]],
+    temperature: float,
+) -> str:
+    response = client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=messages,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "llm_generated_question_set",
+                "schema": LLMGeneratedQuestionSet.model_json_schema(),
+                "strict": True,
+            },
+        },
+        temperature=temperature,
+    )
+    return response.choices[0].message.content or "{}"
+
+
+def _chat_completion_json_mode(
+    messages: list[dict[str, str]],
+    temperature: float,
+) -> str:
+    response = client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=messages,
+        response_format={"type": "json_object"},
+        temperature=temperature,
+    )
+    return response.choices[0].message.content or "{}"
+
+
+def _call_llm_json(
+    prompt: str,
+    system_message: str,
+    temperature: float,
+) -> dict[str, Any]:
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": prompt},
+    ]
+
+    raw_content = None
+    schema_error = None
+
+    try:
+        raw_content = _chat_completion_with_schema(
+            messages=messages,
+            temperature=temperature,
+        )
+    except Exception as exc:
+        schema_error = exc
+
+    if raw_content is None:
+        raw_content = _chat_completion_json_mode(
+            messages=messages,
+            temperature=temperature,
+        )
+
+    clean_content = clean_json_response(raw_content)
+
+    try:
+        return json.loads(clean_content)
+    except json.JSONDecodeError as exc:
+        if schema_error is not None:
+            raise ValueError(
+                f"Structured output fallback also failed. Schema error: {schema_error}; JSON parse error: {exc}"
+            ) from exc
+        raise
 
 
 def generate_questions_from_content(
@@ -163,32 +404,36 @@ def generate_questions_from_content(
         difficulty=difficulty,
     )
 
-    response = client.chat.completions.create(
-        model=settings.openrouter_model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You generate high-quality exam questions and must return strict JSON only.",
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.3,
-    )
+    expected_minimum = objective_count + descriptive_count
+    last_error: Exception | None = None
 
-    raw_content = response.choices[0].message.content
-    clean_content = clean_json_response(raw_content)
-    parsed = json.loads(clean_content) # Use clean_content here
+    for attempt in range(2):
+        try:
+            parsed = _call_llm_json(
+                prompt=prompt,
+                system_message="You generate high-quality exam questions and must return strict JSON only.",
+                temperature=0.3 if attempt == 0 else 0.2,
+            )
 
-    try:
-        validated = LLMGeneratedQuestionSet.model_validate(parsed)
-    except ValidationError as exc:
-        raise ValueError(f"LLM output validation failed: {exc}") from exc
+            validated = _validate_question_set(
+                parsed=parsed,
+                options_count=options_count,
+                difficulty=difficulty,
+            )
 
-    return [question.model_dump() for question in validated.questions]
+            if len(validated.questions) < expected_minimum:
+                raise ValueError(
+                    f"LLM returned only {len(validated.questions)} valid questions, expected at least {expected_minimum}."
+                )
+
+            return [question.model_dump() for question in validated.questions]
+
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == 1:
+                break
+
+    raise ValueError(f"LLM output validation failed after retry: {last_error}")
 
 
 def extract_questions_with_llm(
@@ -208,33 +453,34 @@ def extract_questions_with_llm(
         difficulty=difficulty,
     )
 
-    response = client.chat.completions.create(
-        model=settings.openrouter_model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a precise data extraction tool. You return strict JSON only.",
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.1,
-    )
+    last_error: Exception | None = None
 
-    raw_content = response.choices[0].message.content
-    
-    clean_content = clean_json_response(raw_content)
-    parsed = json.loads(clean_content) # Use clean_content here
+    for attempt in range(2):
+        try:
+            parsed = _call_llm_json(
+                prompt=prompt,
+                system_message="You are a precise data extraction tool. You return strict JSON only.",
+                temperature=0.1,
+            )
 
-    try:
-        validated = LLMGeneratedQuestionSet.model_validate(parsed)
-    except ValidationError as exc:
-        raise ValueError(f"LLM extraction validation failed: {exc}") from exc
+            validated = _validate_question_set(
+                parsed=parsed,
+                options_count=options_count,
+                difficulty=difficulty,
+            )
 
-    return [question.model_dump() for question in validated.questions]
+            if len(validated.questions) == 0:
+                raise ValueError("No valid questions could be extracted from the LLM output.")
+
+            return [question.model_dump() for question in validated.questions]
+
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == 1:
+                break
+
+    raise ValueError(f"LLM extraction validation failed after retry: {last_error}")
+
 
 def extract_existing_questions(
     text: str,
@@ -245,21 +491,40 @@ def extract_existing_questions(
     questions = []
     current_question = None
     next_q_num = 1
-    
-    # Matches Q1. Q 1) 1. 1) Question 1: (and captures the number)
-    question_pattern = re.compile(r"^(?:Q(?:uestion)?\s*\.?\s*(\d+)|(\d+))\s*[\).:-](?:\s+(.*))?$", re.IGNORECASE)
-    
-    # Matches A) (A) a. 1. (1)
-    option_pattern = re.compile(r"^[\(]?([A-Fa-f1-6])[\).]\s+(.*)", re.IGNORECASE)
-    answer_pattern = re.compile(r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Fa-f1-6])[\)]?", re.IGNORECASE)
 
-    # Maps letters/numbers to their logical sequence index
-    opt_map = {'A':1, 'B':2, 'C':3, 'D':4, 'E':5, 'F':6, '1':1, '2':2, '3':3, '4':4, '5':5, '6':6}
+    question_pattern = re.compile(
+        r"^(?:Q(?:uestion)?\s*\.?\s*(\d+)|(\d+))\s*[\).:-](?:\s+(.*))?$",
+        re.IGNORECASE,
+    )
+
+    option_pattern = re.compile(r"^[\(]?([A-Fa-f1-6])[\).]\s+(.*)", re.IGNORECASE)
+    answer_pattern = re.compile(
+        r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Fa-f1-6])[\)]?",
+        re.IGNORECASE,
+    )
+
+    opt_map = {
+        "A": 1,
+        "B": 2,
+        "C": 3,
+        "D": 4,
+        "E": 5,
+        "F": 6,
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "4": 4,
+        "5": 5,
+        "6": 6,
+    }
 
     for line in lines:
-        # Skip common NEET/SSC PDF headers and footers to keep text clean
         lower_line = line.lower()
-        if "exam paper" in lower_line or "contact number" in lower_line or lower_line.startswith("page:"):
+        if (
+            "exam paper" in lower_line
+            or "contact number" in lower_line
+            or lower_line.startswith("page:")
+        ):
             continue
 
         q_match = question_pattern.match(line)
@@ -270,9 +535,7 @@ def extract_existing_questions(
         if q_match:
             q_num_str = q_match.group(1) or q_match.group(2)
             q_num = int(q_num_str)
-            
-            # Accept if it's the very first question found (allows papers starting at Q91)
-            # OR if it sequentially follows the last question (allows a gap of 5 for skipped/mangled questions)
+
             if current_question is None or (next_q_num <= q_num <= next_q_num + 5):
                 is_new_question = True
                 next_q_num = q_num + 1
@@ -281,7 +544,7 @@ def extract_existing_questions(
         if is_new_question:
             if current_question:
                 questions.append(current_question)
-            
+
             current_question = {
                 "question_type": "objective",
                 "question_text": q_text,
@@ -301,15 +564,14 @@ def extract_existing_questions(
         if o_match and current_question:
             opt_id = o_match.group(1).upper()
             opt_text = o_match.group(2).strip()
-            
+
             expected_opt_num = len(current_question["options"]) + 1
-            
-            # Check if this option logically follows the previous one (e.g., expecting 'B' or '2')
+
             if expected_opt_num <= options_count and opt_id in opt_map:
                 if opt_map[opt_id] == expected_opt_num:
                     current_question["options"].append({
                         "id": opt_id,
-                        "text": opt_text
+                        "text": opt_text,
                     })
                     continue
 
@@ -318,7 +580,6 @@ def extract_existing_questions(
             current_question["correct_option_ids"] = [correct_letter]
             continue
 
-        # Append trailing text to the current block (either question text or the last option)
         if current_question:
             if len(current_question["options"]) == 0:
                 if current_question["question_text"]:
@@ -331,11 +592,13 @@ def extract_existing_questions(
     if current_question:
         questions.append(current_question)
 
-    # Normalize question types based on successfully found options
     for q in questions:
         if len(q["options"]) > 0:
             q["question_type"] = "objective"
         else:
             q["question_type"] = "descriptive"
+            q["marks"] = q.get("marks") or 5
+            q["correct_answer_text"] = q.get("correct_answer_text") or "Refer to source content."
+            q["correct_option_ids"] = []
 
     return questions
