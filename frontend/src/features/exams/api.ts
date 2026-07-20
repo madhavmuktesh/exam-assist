@@ -293,7 +293,7 @@ export async function getExamResult(
 }
 
 export async function getExamHistory(): Promise<ExamHistoryResponse> {
-  const res = await api.get<ExamHistoryResponse>("/responses/history");
+  const res = await api.get<ExamHistoryResponse>("/history");
   return res.data;
 }
 

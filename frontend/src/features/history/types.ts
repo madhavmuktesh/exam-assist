@@ -1,1 +1,0 @@
-export type { ExamHistoryItem, ExamHistoryResponse } from "@/features/exams/api";

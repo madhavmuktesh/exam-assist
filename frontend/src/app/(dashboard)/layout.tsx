@@ -43,11 +43,13 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   
-  // FIX 1: We grab refreshUser from context so we don't have to hard-reload the page!
   const { user, loading, logout, refreshUser } = useAuth();
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  
+  // NEW: State for mobile menu toggle
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,8 +65,7 @@ export default function DashboardLayout({
   const handleLogout = async () => {
     try {
       await logout();
-      // logout function in your api.ts already handles localStorage and redirects, 
-      // so we don't need to manually duplicate that logic here.
+      setMobileMenuOpen(false);
     } catch (e) {
       console.error("Logout failed:", e);
     }
@@ -75,12 +76,15 @@ export default function DashboardLayout({
     setAuthMode("login");
     setError(null);
     setShowAuthModal(true);
+    setMobileMenuOpen(false); // Close mobile menu if opening auth modal
   };
 
   const handleRestrictedNav = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (!loading && !user) {
       e.preventDefault();
       openModal();
+    } else {
+      setMobileMenuOpen(false); // Close menu on successful navigation
     }
   };
 
@@ -92,11 +96,9 @@ export default function DashboardLayout({
     try {
       if (authMode === "login") {
         await login({ email, password });
-        
-        // FIX 2: Seamlessly fetch the user data into React Context without a hard refresh
         await refreshUser(); 
         setShowAuthModal(false);
-        router.refresh(); // Tells Next.js to quietly update any server components
+        router.refresh();
       } else {
         await register({
           full_name: fullName,
@@ -112,8 +114,8 @@ export default function DashboardLayout({
       setError(
         getApiErrorMessage(
           err,
-          `${authMode === "login" ? "Login" : "Registration"} failed.`,
-        ),
+          `${authMode === "login" ? "Login" : "Registration"} failed.`
+        )
       );
     } finally {
       setAuthLoading(false);
@@ -128,11 +130,10 @@ export default function DashboardLayout({
             <div className="max-w-6xl mx-auto px-4 sm:px-6">
               <div className="flex min-h-[72px] items-center justify-between gap-4">
                 <div className="flex items-center gap-8">
-                  <Link href="/" className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 rounded-xl">
+                  <Link href="/" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 rounded-xl">
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800 text-white text-sm font-bold shadow-sm">
                       EA
                     </div>
-
                     <div className="hidden sm:block">
                       <p className="text-base font-bold text-slate-800">
                         Exam Assistant
@@ -143,11 +144,11 @@ export default function DashboardLayout({
                     </div>
                   </Link>
 
+                  {/* Desktop Navigation */}
                   <nav className="hidden md:flex items-center gap-6 text-sm">
                     <Link href="/" className={navLinkClass(pathname === "/")}>
                       Home
                     </Link>
-
                     <Link
                       href="/exams/create"
                       onClick={handleRestrictedNav}
@@ -155,7 +156,6 @@ export default function DashboardLayout({
                     >
                       Create Exam
                     </Link>
-
                     <Link
                       href="/history"
                       onClick={handleRestrictedNav}
@@ -163,7 +163,6 @@ export default function DashboardLayout({
                     >
                       History
                     </Link>
-
                     {user && (
                       <Link
                         href="/profile"
@@ -176,7 +175,6 @@ export default function DashboardLayout({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* FIX 3: Add a Skeleton Loader so the header doesn't flash "Guest access" on load */}
                   {loading ? (
                     <div className="flex items-center gap-3">
                       <div className="hidden sm:flex flex-col items-end gap-1">
@@ -195,10 +193,9 @@ export default function DashboardLayout({
                           Authenticated user
                         </span>
                       </div>
-
                       <button
                         onClick={handleLogout}
-                        className="inline-flex items-center justify-center px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                        className="hidden md:inline-flex items-center justify-center px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                       >
                         Logout
                       </button>
@@ -208,18 +205,88 @@ export default function DashboardLayout({
                       <span className="hidden sm:inline text-sm text-slate-500">
                         Guest access
                       </span>
-
                       <button
                         onClick={openModal}
-                        className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+                        className="hidden md:inline-flex items-center justify-center px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
                       >
                         Sign In
                       </button>
                     </>
                   )}
+
+                  {/* Mobile Menu Toggle Button */}
+                  <button
+                    onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                    className="md:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+                    aria-label="Toggle Menu"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      {mobileMenuOpen ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                      )}
+                    </svg>
+                  </button>
                 </div>
               </div>
             </div>
+
+            {/* Mobile Navigation Dropdown */}
+            {mobileMenuOpen && (
+              <div className="md:hidden border-t border-slate-200 bg-white px-4 py-4 shadow-lg animate-in slide-in-from-top-2">
+                <nav className="flex flex-col gap-4 text-sm">
+                  <Link 
+                    href="/" 
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={navLinkClass(pathname === "/")}
+                  >
+                    Home
+                  </Link>
+                  <Link
+                    href="/exams/create"
+                    onClick={handleRestrictedNav}
+                    className={navLinkClass(!!pathname?.startsWith("/exams/create"))}
+                  >
+                    Create Exam
+                  </Link>
+                  <Link
+                    href="/history"
+                    onClick={handleRestrictedNav}
+                    className={navLinkClass(!!pathname?.startsWith("/history"))}
+                  >
+                    History
+                  </Link>
+                  {user && (
+                    <Link
+                      href="/profile"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={navLinkClass(!!pathname?.startsWith("/profile"))}
+                    >
+                      Profile
+                    </Link>
+                  )}
+                  
+                  <div className="border-t border-slate-100 pt-4 mt-2">
+                    {user ? (
+                      <button
+                        onClick={handleLogout}
+                        className="w-full text-left px-2 py-1 text-slate-500 hover:text-slate-800 font-medium"
+                      >
+                        Logout ({user.full_name ?? user.email})
+                      </button>
+                    ) : (
+                      <button
+                        onClick={openModal}
+                        className="w-full inline-flex items-center justify-center px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700"
+                      >
+                        Sign In
+                      </button>
+                    )}
+                  </div>
+                </nav>
+              </div>
+            )}
           </header>
         )}
 
@@ -227,7 +294,6 @@ export default function DashboardLayout({
           {children}
         </main>
 
-        {/* FIX 4: Close modal if user clicks the dark backdrop outside the modal */}
         {!isExamAttemptPage && showAuthModal && (
           <div 
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"

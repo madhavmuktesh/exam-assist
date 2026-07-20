@@ -1,1 +1,0 @@
-export { useExamHistory } from "@/features/exams/hooks";

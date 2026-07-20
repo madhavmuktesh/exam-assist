@@ -10,9 +10,10 @@ from app.core.security import create_access_token, create_refresh_token
 def serialize_user(user: dict) -> dict:
     return {
         "id": str(user["_id"]),
-        "full_name": user["full_name"],
+        "full_name": user.get("full_name", ""),
         "email": user["email"],
-        "phone_number": user.get("phone_number"),
+        "phone_number": user.get("phone_number", ""),
+        "is_active": user.get("is_active", True),
         "created_at": user["created_at"],
         "updated_at": user["updated_at"],
     }

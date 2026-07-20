@@ -45,7 +45,7 @@ class UserResponse(BaseModel):
     full_name: str
     email: EmailStr
     phone_number: str
-    is_active: bool
+    is_active: bool = True
     created_at: datetime
     updated_at: datetime
 
