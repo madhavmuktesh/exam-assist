@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { AuthProvider } from "@/hooks/useauth"; // 1. Import the new provider
 
 export const metadata = {
-  title: "Exam Assistant",
+  title: "Exam Workspace",
   description: "AI-powered exam assistant",
 };
 

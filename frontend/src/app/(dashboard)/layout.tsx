@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { createContext, useMemo, useState } from "react";
 import Link from "next/link";
+import { Eye, EyeOff } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useauth";
 import { login, register } from "@/features/auth/api";
@@ -42,13 +43,11 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  
+
   const { user, loading, logout, refreshUser } = useAuth();
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  
-  // NEW: State for mobile menu toggle
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [email, setEmail] = useState("");
@@ -57,10 +56,20 @@ export default function DashboardLayout({
   const [phoneNumber, setPhoneNumber] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const isExamAttemptPage = useMemo(() => {
     return /^\/exams\/[^/]+\/start$/.test(pathname ?? "");
   }, [pathname]);
+
+  const resetAuthForm = () => {
+    setEmail("");
+    setPassword("");
+    setFullName("");
+    setPhoneNumber("");
+    setError(null);
+    setShowPassword(false);
+  };
 
   const handleLogout = async () => {
     try {
@@ -74,9 +83,29 @@ export default function DashboardLayout({
   const openModal = () => {
     if (isExamAttemptPage) return;
     setAuthMode("login");
-    setError(null);
+    resetAuthForm();
     setShowAuthModal(true);
-    setMobileMenuOpen(false); // Close mobile menu if opening auth modal
+    setMobileMenuOpen(false);
+  };
+
+  const closeModal = () => {
+    setShowAuthModal(false);
+    setAuthLoading(false);
+    resetAuthForm();
+  };
+
+  const switchToRegister = () => {
+    setAuthMode("register");
+    setError(null);
+    setPassword("");
+    setShowPassword(false);
+  };
+
+  const switchToLogin = () => {
+    setAuthMode("login");
+    setError(null);
+    setPassword("");
+    setShowPassword(false);
   };
 
   const handleRestrictedNav = (e: React.MouseEvent<HTMLAnchorElement>) => {
@@ -84,7 +113,7 @@ export default function DashboardLayout({
       e.preventDefault();
       openModal();
     } else {
-      setMobileMenuOpen(false); // Close menu on successful navigation
+      setMobileMenuOpen(false);
     }
   };
 
@@ -96,8 +125,8 @@ export default function DashboardLayout({
     try {
       if (authMode === "login") {
         await login({ email, password });
-        await refreshUser(); 
-        setShowAuthModal(false);
+        await refreshUser();
+        closeModal();
         router.refresh();
       } else {
         await register({
@@ -108,6 +137,8 @@ export default function DashboardLayout({
         });
 
         setAuthMode("login");
+        setPassword("");
+        setShowPassword(false);
         setError("Registration successful! Please sign in.");
       }
     } catch (err: any) {
@@ -130,7 +161,11 @@ export default function DashboardLayout({
             <div className="max-w-6xl mx-auto px-4 sm:px-6">
               <div className="flex min-h-[72px] items-center justify-between gap-4">
                 <div className="flex items-center gap-8">
-                  <Link href="/" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 rounded-xl">
+                  <Link
+                    href="/"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 rounded-xl"
+                  >
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800 text-white text-sm font-bold shadow-sm">
                       EA
                     </div>
@@ -144,7 +179,6 @@ export default function DashboardLayout({
                     </div>
                   </Link>
 
-                  {/* Desktop Navigation */}
                   <nav className="hidden md:flex items-center gap-6 text-sm">
                     <Link href="/" className={navLinkClass(pathname === "/")}>
                       Home
@@ -152,7 +186,9 @@ export default function DashboardLayout({
                     <Link
                       href="/exams/create"
                       onClick={handleRestrictedNav}
-                      className={navLinkClass(!!pathname?.startsWith("/exams/create"))}
+                      className={navLinkClass(
+                        !!pathname?.startsWith("/exams/create")
+                      )}
                     >
                       Create Exam
                     </Link>
@@ -214,17 +250,31 @@ export default function DashboardLayout({
                     </>
                   )}
 
-                  {/* Mobile Menu Toggle Button */}
                   <button
                     onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                     className="md:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                     aria-label="Toggle Menu"
                   >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg
+                      className="w-6 h-6"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
                       {mobileMenuOpen ? (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
                       ) : (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 6h16M4 12h16M4 18h16"
+                        />
                       )}
                     </svg>
                   </button>
@@ -232,12 +282,11 @@ export default function DashboardLayout({
               </div>
             </div>
 
-            {/* Mobile Navigation Dropdown */}
             {mobileMenuOpen && (
               <div className="md:hidden border-t border-slate-200 bg-white px-4 py-4 shadow-lg animate-in slide-in-from-top-2">
                 <nav className="flex flex-col gap-4 text-sm">
-                  <Link 
-                    href="/" 
+                  <Link
+                    href="/"
                     onClick={() => setMobileMenuOpen(false)}
                     className={navLinkClass(pathname === "/")}
                   >
@@ -246,7 +295,9 @@ export default function DashboardLayout({
                   <Link
                     href="/exams/create"
                     onClick={handleRestrictedNav}
-                    className={navLinkClass(!!pathname?.startsWith("/exams/create"))}
+                    className={navLinkClass(
+                      !!pathname?.startsWith("/exams/create")
+                    )}
                   >
                     Create Exam
                   </Link>
@@ -266,7 +317,7 @@ export default function DashboardLayout({
                       Profile
                     </Link>
                   )}
-                  
+
                   <div className="border-t border-slate-100 pt-4 mt-2">
                     {user ? (
                       <button
@@ -295,10 +346,10 @@ export default function DashboardLayout({
         </main>
 
         {!isExamAttemptPage && showAuthModal && (
-          <div 
+          <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
             onMouseDown={(e) => {
-              if (e.target === e.currentTarget) setShowAuthModal(false);
+              if (e.target === e.currentTarget) closeModal();
             }}
           >
             <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -316,7 +367,7 @@ export default function DashboardLayout({
                   </div>
 
                   <button
-                    onClick={() => setShowAuthModal(false)}
+                    onClick={closeModal}
                     aria-label="Close modal"
                     className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                   >
@@ -379,15 +430,25 @@ export default function DashboardLayout({
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">
                     Password
                   </label>
-                  <input
-                    type="password"
-                    required
-                    disabled={authLoading}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
-                    placeholder="Enter your password"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      disabled={authLoading}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 pr-12 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
+                      placeholder="Enter your password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      className="absolute inset-y-0 right-3 flex items-center text-slate-500 hover:text-slate-700 focus:outline-none"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
                 </div>
 
                 {error && (
@@ -407,11 +468,25 @@ export default function DashboardLayout({
                   disabled={authLoading}
                   className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 py-2.5 text-white font-medium shadow-sm transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {/* FIX 5: Proper Loading indicator in the button */}
                   {authLoading && (
-                    <svg className="h-4 w-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    <svg
+                      className="h-4 w-4 animate-spin text-white"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
                     </svg>
                   )}
                   {authLoading
@@ -429,10 +504,7 @@ export default function DashboardLayout({
                     <button
                       type="button"
                       disabled={authLoading}
-                      onClick={() => {
-                        setAuthMode("register");
-                        setError(null);
-                      }}
+                      onClick={switchToRegister}
                       className="font-semibold text-slate-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 rounded disabled:opacity-50"
                     >
                       Register here
@@ -444,10 +516,7 @@ export default function DashboardLayout({
                     <button
                       type="button"
                       disabled={authLoading}
-                      onClick={() => {
-                        setAuthMode("login");
-                        setError(null);
-                      }}
+                      onClick={switchToLogin}
                       className="font-semibold text-slate-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 rounded disabled:opacity-50"
                     >
                       Sign in

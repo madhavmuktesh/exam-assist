@@ -19,7 +19,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   function handleLogout() {
     logout();
-    router.push("/login");
+    router.push("/");
   }
 
   const initials = user?.full_name

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import {
   getProfile,
   updateProfile,
@@ -8,7 +9,7 @@ import {
   deleteAccount,
   type ProfileResponse,
 } from "@/features/profile/api";
-import { useAuth } from "@/hooks/useauth"; // FIX 1: Import Auth Context
+import { useAuth } from "@/hooks/useauth";
 
 function getApiErrorMessage(error: any, fallback = "Failed to load profile.") {
   const detail = error?.response?.data?.detail;
@@ -27,8 +28,7 @@ function getApiErrorMessage(error: any, fallback = "Failed to load profile.") {
 }
 
 export default function ProfilePage() {
-  // Pull refreshUser and logout from context to keep global state in sync
-  const { refreshUser, logout } = useAuth(); 
+  const { refreshUser, logout } = useAuth();
 
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,6 +56,10 @@ export default function ProfilePage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
+
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -94,10 +98,9 @@ export default function ProfilePage() {
         full_name: updated.full_name ?? "",
         phone_number: updated.phone_number ?? "",
       });
-      
-      // FIX 2: Tell the global layout to fetch the newly updated name
-      await refreshUser(); 
-      
+
+      await refreshUser();
+
       setProfileMessage("Profile updated successfully.");
     } catch (err: any) {
       setProfileError(getApiErrorMessage(err, "Failed to update profile."));
@@ -140,6 +143,9 @@ export default function ProfilePage() {
         new_password: "",
         confirm_password: "",
       });
+      setShowCurrentPassword(false);
+      setShowNewPassword(false);
+      setShowConfirmPassword(false);
     } catch (err: any) {
       setPasswordError(getApiErrorMessage(err, "Failed to change password."));
     } finally {
@@ -152,7 +158,7 @@ export default function ProfilePage() {
     setDeleteError(null);
 
     const confirmed = window.confirm(
-      "Are you sure you want to delete your account? This will permanently remove your profile, exams, questions, responses, and results.",
+      "Are you sure you want to delete your account? This will permanently remove your profile, exams, questions, responses, and results."
     );
 
     if (!confirmed) return;
@@ -161,8 +167,6 @@ export default function ProfilePage() {
       setDeletingAccount(true);
       const res = await deleteAccount();
       setDeleteMessage(res.message || "Account deleted successfully.");
-      
-      // Use the context logout to cleanly clear state and redirect
       logout();
     } catch (err: any) {
       setDeleteError(getApiErrorMessage(err, "Failed to delete account."));
@@ -170,7 +174,6 @@ export default function ProfilePage() {
     }
   }
 
-  // FIX 3: Proper Skeleton Loading State to prevent layout shift
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
@@ -370,57 +373,87 @@ export default function ProfilePage() {
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
                 Current Password
               </label>
-              <input
-                type="password"
-                disabled={savingPassword}
-                value={passwordForm.current_password}
-                onChange={(e) =>
-                  setPasswordForm((prev) => ({
-                    ...prev,
-                    current_password: e.target.value,
-                  }))
-                }
-                placeholder="Enter current password"
-                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
-              />
+              <div className="relative">
+                <input
+                  type={showCurrentPassword ? "text" : "password"}
+                  disabled={savingPassword}
+                  value={passwordForm.current_password}
+                  onChange={(e) =>
+                    setPasswordForm((prev) => ({
+                      ...prev,
+                      current_password: e.target.value,
+                    }))
+                  }
+                  placeholder="Enter current password"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 pr-12 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCurrentPassword((prev) => !prev)}
+                  aria-label={showCurrentPassword ? "Hide current password" : "Show current password"}
+                  className="absolute inset-y-0 right-3 flex items-center text-slate-500 hover:text-slate-700 focus:outline-none"
+                >
+                  {showCurrentPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
                 New Password
               </label>
-              <input
-                type="password"
-                disabled={savingPassword}
-                value={passwordForm.new_password}
-                onChange={(e) =>
-                  setPasswordForm((prev) => ({
-                    ...prev,
-                    new_password: e.target.value,
-                  }))
-                }
-                placeholder="Enter new password"
-                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
-              />
+              <div className="relative">
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  disabled={savingPassword}
+                  value={passwordForm.new_password}
+                  onChange={(e) =>
+                    setPasswordForm((prev) => ({
+                      ...prev,
+                      new_password: e.target.value,
+                    }))
+                  }
+                  placeholder="Enter new password"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 pr-12 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword((prev) => !prev)}
+                  aria-label={showNewPassword ? "Hide new password" : "Show new password"}
+                  className="absolute inset-y-0 right-3 flex items-center text-slate-500 hover:text-slate-700 focus:outline-none"
+                >
+                  {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
                 Confirm New Password
               </label>
-              <input
-                type="password"
-                disabled={savingPassword}
-                value={passwordForm.confirm_password}
-                onChange={(e) =>
-                  setPasswordForm((prev) => ({
-                    ...prev,
-                    confirm_password: e.target.value,
-                  }))
-                }
-                placeholder="Confirm new password"
-                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
-              />
+              <div className="relative">
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  disabled={savingPassword}
+                  value={passwordForm.confirm_password}
+                  onChange={(e) =>
+                    setPasswordForm((prev) => ({
+                      ...prev,
+                      confirm_password: e.target.value,
+                    }))
+                  }
+                  placeholder="Confirm new password"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 pr-12 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                  className="absolute inset-y-0 right-3 flex items-center text-slate-500 hover:text-slate-700 focus:outline-none"
+                >
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             <button
