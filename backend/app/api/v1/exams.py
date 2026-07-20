@@ -229,3 +229,24 @@ def cancel_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
         },
     )
     return {"message": "Exam cancelled successfully"}
+
+@router.get("/{exam_id}/ready")
+def check_exam_ready(exam_id: str, current_user: dict = Depends(get_current_user)):
+    db = get_database()
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
+    
+    status = exam.get("status")
+    question_count = db.questions.count_documents({
+        "exam_id": exam_id,
+        "user_id": str(current_user["_id"]),
+        "is_active": True,
+    })
+
+    is_ready = status == "ready" and question_count > 0
+
+    return {
+        "exam_id": exam_id,
+        "status": status,
+        "is_ready": is_ready,
+        "question_count": question_count,
+    }

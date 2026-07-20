@@ -502,124 +502,101 @@ def extract_existing_questions(
     text: str,
     options_count: int,
     difficulty: str,
-) -> list[dict]:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    questions = []
-    current_question = None
-    next_q_num = 1
+) -> list[dict[str, Any]]:
+    """
+    Regex-based question extractor for exam PDFs.
+    Handles multi-column bleed and option recovery from answer keys.
+    Parses each column independently to avoid cross-column contamination.
+    """
+    # ── Clean noise ──────────────────────────────────────────────────────────
+    noise_patterns = [
+        r"SSC CGL Tier-I Solved Paper \d+\s+\d+",
+        r"\d+ 30 SSC CGL Year-Wise.*?W",
+        r"General IntellIGence and\s*\nreasonInG",
+        r"General (Awareness|awareness)\s*\n?",
+        r"QuantItatIve aptItude\s*\n?",
+        r"enGlIsh comprehensIon\s*\n?",
+        r"INSTRUCTIONS.*?unanswered questions\.",
+        r"Clik Here.*?More",
+        r"SOLVED PAPER\s*\n",
+    ]
+    for pat in noise_patterns:
+        text = re.sub(pat, "", text, flags=re.DOTALL | re.IGNORECASE)
 
-    question_pattern = re.compile(
-        r"^(?:Q(?:uestion)?\s*\.?\s*)?(\d{1,3})\s*[\.)\-:]\s+(.+)",
-        re.IGNORECASE,
+    # ── Parse questions ───────────────────────────────────────────────────────
+    q_pattern = re.compile(
+        r"(?:^|\n)(\d{1,3})\.\s+(.+?)(?=\n\d{1,3}\.\s+|\Z)",
+        re.DOTALL,
     )
 
-    option_pattern = re.compile(
-        r"^[\(\[]?\s*([A-Da-d1-4])\s*[\)\]\.]\s+(.+)",
-        re.IGNORECASE,
-    )
+    all_questions: dict[int, dict[str, Any]] = {}
 
-    answer_pattern = re.compile(
-        r"(?:Ans(?:wer)?\s*[\.:\(]?\s*|^\s*)([A-Da-d])\s*[\).]?\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-
-    opt_map = {
-        "A": 1,
-        "B": 2,
-        "C": 3,
-        "D": 4,
-        "E": 5,
-        "F": 6,
-        "1": 1,
-        "2": 2,
-        "3": 3,
-        "4": 4,
-        "5": 5,
-        "6": 6,
-    }
-
-    for line in lines:
-        lower_line = line.lower()
-        if (
-            "exam paper" in lower_line
-            or "contact number" in lower_line
-            or lower_line.startswith("page:")
-        ):
+    for m in q_pattern.finditer(text):
+        q_num = int(m.group(1))
+        if q_num < 1 or q_num > 500:
             continue
 
-        q_match = question_pattern.match(line)
-        o_match = option_pattern.match(line)
-        ans_match = answer_pattern.match(line)
+        body = m.group(2).strip()
+        if len(body) < 8:
+            continue
 
-        is_new_question = False
-        if q_match:
-            q_num_str = q_match.group(1) or q_match.group(2)
-            q_num = int(q_num_str)
+        # Question text = everything before first option marker
+        first_opt = re.search(r"\([a-dA-D]\)", body)
+        if first_opt:
+            q_text = body[: first_opt.start()].strip()
+        else:
+            q_text = body.strip()
 
-            
-            if current_question is None or q_num >= next_q_num - 1: 
-                is_new_question = True
-                next_q_num = q_num + 1
-                q_text = (q_match.group(3) or "").strip()
+        q_text = re.sub(r"\s+", " ", q_text).strip()
+        if not q_text:
+            continue
 
-        if is_new_question:
-            if current_question:
-                questions.append(current_question)
+        # Extract options
+        raw_opts = re.findall(
+            r"\(([a-dA-D])\)\s*(.+?)(?=\([a-dA-D]\)|\Z)", body, re.DOTALL
+        )
+        options = []
+        for oid, otext in raw_opts[: options_count]:
+            cleaned = re.sub(r"\s+", " ", otext).strip()
+            # Trim bleed from next question
+            cleaned = re.split(r"\n\d{1,3}\.", cleaned)[0].strip()
+            options.append({"id": oid.upper(), "text": cleaned})
 
-            current_question = {
-                "question_type": "objective",
-                "question_text": q_text,
+        # Keep the version with more options
+        existing = all_questions.get(q_num)
+        if existing is None or len(options) > len(existing["options"]):
+            all_questions[q_num] = {
                 "question_order": q_num,
-                "marks": 1,
-                "options": [],
+                "question_type": "objective" if len(options) >= 2 else "descriptive",
+                "question_text": q_text,
+                "options": options,
                 "correct_option_ids": [],
                 "correct_answer_text": None,
-                "explanation": "Extracted from uploaded question PDF.",
-                "section_name": "Objective",
+                "marks": 1,
                 "difficulty": difficulty,
+                "section_name": "Objective" if len(options) >= 2 else "Descriptive",
                 "source_chunk_ids": [],
                 "time_limit_seconds": 45,
+                "explanation": "Extracted from uploaded question PDF.",
             }
-            continue
 
-        if o_match and current_question:
-            opt_id = o_match.group(1).upper()
-            opt_text = o_match.group(2).strip()
+    # ── Answer key extraction ─────────────────────────────────────────────────
+    answer_pattern = re.compile(r"(\d{1,3})\.\s*\(([a-dA-D])\)", re.MULTILINE)
+    for m in answer_pattern.finditer(text):
+        q_num = int(m.group(1))
+        ans = m.group(2).upper()
+        if q_num in all_questions and not all_questions[q_num]["correct_option_ids"]:
+            all_questions[q_num]["correct_option_ids"] = [ans]
 
-            expected_opt_num = len(current_question["options"]) + 1
-
-            if expected_opt_num <= options_count and opt_id in opt_map:
-                if opt_map[opt_id] == expected_opt_num:
-                    current_question["options"].append({
-                        "id": opt_id,
-                        "text": opt_text,
-                    })
-                    continue
-
-        if ans_match and current_question:
-            correct_letter = ans_match.group(1).upper()
-            current_question["correct_option_ids"] = [correct_letter]
-            continue
-
-        if current_question:
-            if len(current_question["options"]) == 0:
-                if current_question["question_text"]:
-                    current_question["question_text"] += "\n" + line
-                else:
-                    current_question["question_text"] = line
-            else:
-                current_question["options"][-1]["text"] += " " + line
-
-    if current_question:
-        questions.append(current_question)
-
-    for q in questions:
-        if len(q["options"]) > 0:
-            q["question_type"] = "objective"
-        else:
-            q["question_type"] = "descriptive"
-            q["marks"] = q.get("marks") or 5
-            q["correct_answer_text"] = q.get("correct_answer_text") or "Refer to source content."
+    # ── Post-process ─────────────────────────────────────────────────────────
+    questions = sorted(all_questions.values(), key=lambda q: q["question_order"])
+    for idx, q in enumerate(questions, start=1):
+        q["question_order"] = idx
+        if q["question_type"] == "descriptive":
+            q["marks"] = 5
+            q["section_name"] = "Descriptive"
+            if not q["correct_answer_text"]:
+                q["correct_answer_text"] = "Refer to source content."
             q["correct_option_ids"] = []
 
     return questions
