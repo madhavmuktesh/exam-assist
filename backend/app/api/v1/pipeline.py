@@ -7,33 +7,15 @@ from app.api.deps import get_current_user
 from app.core.database import get_database
 from app.models.question import question_document
 from app.schemas.pipeline import PdfUploadResponse, PrepareExamResponse
-from app.services.pdf_service import extract_text_from_pdf, save_uploaded_pdf
-from app.services.question_generation_service import (
-    extract_existing_questions,
+from app.services.storage_service import save_uploaded_pdf
+from app.rag.loaders.pdf_loader import extract_text_from_pdf
+from app.rag.generators.question_generator import (
     generate_questions_from_content,
 )
+from app.rag.utils.parser import extract_existing_questions
+from app.services.exam_service import get_exam_or_404
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
-
-
-def get_exam_for_user(db, exam_id: str, user_id: str):
-    if not ObjectId.is_valid(exam_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid exam id",
-        )
-
-    exam = db.exams.find_one(
-        {"_id": ObjectId(exam_id), "user_id": user_id, "is_active": True}
-    )
-
-    if not exam:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Exam not found",
-        )
-
-    return exam
 
 
 @router.post("/exam/{exam_id}/upload-pdf", response_model=PdfUploadResponse)
@@ -43,26 +25,17 @@ async def upload_exam_pdf(
     current_user: dict = Depends(get_current_user),
 ):
     db = get_database()
-    exam = get_exam_for_user(db, exam_id, str(current_user["_id"]))
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 
     if exam.get("status") == "submitted":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot upload PDF for a submitted exam",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot upload PDF for a submitted exam")
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are allowed",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are allowed")
 
     file_bytes = await file.read()
     if not file_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded PDF is empty",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded PDF is empty")
 
     saved_path = save_uploaded_pdf(file.filename, file_bytes)
     extraction = extract_text_from_pdf(saved_path)
@@ -70,17 +43,15 @@ async def upload_exam_pdf(
 
     db.exams.update_one(
         {"_id": exam["_id"]},
-        {
-            "$set": {
-                "pdf_filename": file.filename,
-                "pdf_path": saved_path,
-                "pdf_page_count": extraction["page_count"],
-                "pdf_char_count": extraction["char_count"],
-                "pdf_extraction_mode": extraction["extraction_mode"],
-                "pdf_needs_ocr": extraction["needs_ocr"],
-                "updated_at": now,
-            }
-        },
+        {"$set": {
+            "pdf_filename": file.filename,
+            "pdf_path": saved_path,
+            "pdf_page_count": extraction["page_count"],
+            "pdf_char_count": extraction["char_count"],
+            "pdf_extraction_mode": extraction["extraction_mode"],
+            "pdf_needs_ocr": extraction["needs_ocr"],
+            "updated_at": now,
+        }},
     )
 
     return {
@@ -101,79 +72,46 @@ def prepare_exam_from_source(
     current_user: dict = Depends(get_current_user),
 ):
     db = get_database()
-    exam = get_exam_for_user(db, exam_id, str(current_user["_id"]))
+    exam = get_exam_or_404(db, exam_id, str(current_user["_id"]))
 
     if exam.get("status") == "submitted":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot prepare a submitted exam",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot prepare a submitted exam")
 
     pdf_path = exam.get("pdf_path")
     topic_name = exam.get("topic_name")
     source_type = exam.get("source_type")
     input_mode = exam.get("input_mode")
-
     source_text = ""
 
     if source_type in {"pdf", "questions_pdf"}:
         if not pdf_path:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No PDF uploaded for this exam",
-            )
-
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No PDF uploaded for this exam")
         extraction = extract_text_from_pdf(pdf_path)
         source_text = extraction["full_text"]
-
         db.exams.update_one(
             {"_id": exam["_id"]},
-            {
-                "$set": {
-                    "generation_status": "processing",
-                    "pdf_page_count": extraction["page_count"],
-                    "pdf_char_count": extraction["char_count"],
-                    "pdf_extraction_mode": extraction["extraction_mode"],
-                    "pdf_needs_ocr": extraction["needs_ocr"],
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
+            {"$set": {
+                "generation_status": "processing",
+                "pdf_page_count": extraction["page_count"],
+                "pdf_char_count": extraction["char_count"],
+                "pdf_extraction_mode": extraction["extraction_mode"],
+                "pdf_needs_ocr": extraction["needs_ocr"],
+                "updated_at": datetime.now(timezone.utc),
+            }},
         )
     elif source_type == "topic":
         source_text = topic_name or ""
-        extraction = {
-            "char_count": len(source_text),
-            "needs_ocr": False,
-        }
+        extraction = {"char_count": len(source_text), "needs_ocr": False}
         db.exams.update_one(
             {"_id": exam["_id"]},
-            {
-                "$set": {
-                    "generation_status": "processing",
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
+            {"$set": {"generation_status": "processing", "updated_at": datetime.now(timezone.utc)}},
         )
     else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported source type",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported source type")
 
     if not source_text.strip():
-        db.exams.update_one(
-            {"_id": exam["_id"]},
-            {
-                "$set": {
-                    "generation_status": "failed",
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No extractable content found in source",
-        )
+        db.exams.update_one({"_id": exam["_id"]}, {"$set": {"generation_status": "failed", "updated_at": datetime.now(timezone.utc)}})
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No extractable content found in source")
 
     db.questions.delete_many({"exam_id": str(exam["_id"])})
 
@@ -193,60 +131,34 @@ def prepare_exam_from_source(
                 difficulty=exam["difficulty"],
             )
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unsupported input mode",
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported input mode")
     except Exception as exc:
-        db.exams.update_one(
-            {"_id": exam["_id"]},
-            {
-                "$set": {
-                    "generation_status": "failed",
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Question generation failed: {str(exc)}",
-        )
+        db.exams.update_one({"_id": exam["_id"]}, {"$set": {"generation_status": "failed", "updated_at": datetime.now(timezone.utc)}})
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Question generation failed: {str(exc)}")
 
     if not generated_questions:
-        db.exams.update_one(
-            {"_id": exam["_id"]},
-            {
-                "$set": {
-                    "generation_status": "failed",
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No questions could be generated or extracted",
-        )
+        db.exams.update_one({"_id": exam["_id"]}, {"$set": {"generation_status": "failed", "updated_at": datetime.now(timezone.utc)}})
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No questions could be generated or extracted")
 
-    docs = []
-    for item in generated_questions:
-        docs.append(
-            question_document(
-                exam_id=str(exam["_id"]),
-                user_id=str(current_user["_id"]),
-                question_type=item["question_type"],
-                question_text=item["question_text"],
-                question_order=item["question_order"],
-                marks=item["marks"],
-                options=item.get("options", []),
-                correct_option_ids=item.get("correct_option_ids", []),
-                correct_answer_text=item.get("correct_answer_text"),
-                explanation=item.get("explanation"),
-                section_name=item.get("section_name"),
-                difficulty=item.get("difficulty"),
-                source_chunk_ids=item.get("source_chunk_ids", []),
-                time_limit_seconds=item.get("time_limit_seconds"),
-            )
+    docs = [
+        question_document(
+            exam_id=str(exam["_id"]),
+            user_id=str(current_user["_id"]),
+            question_type=item["question_type"],
+            question_text=item["question_text"],
+            question_order=item["question_order"],
+            marks=item["marks"],
+            options=item.get("options", []),
+            correct_option_ids=item.get("correct_option_ids", []),
+            correct_answer_text=item.get("correct_answer_text"),
+            explanation=item.get("explanation"),
+            section_name=item.get("section_name"),
+            difficulty=item.get("difficulty"),
+            source_chunk_ids=item.get("source_chunk_ids", []),
+            time_limit_seconds=item.get("time_limit_seconds"),
         )
+        for item in generated_questions
+    ]
 
     if docs:
         db.questions.insert_many(docs)
@@ -254,14 +166,7 @@ def prepare_exam_from_source(
     now = datetime.now(timezone.utc)
     db.exams.update_one(
         {"_id": exam["_id"]},
-        {
-            "$set": {
-                "generation_status": "completed",
-                "status": "ready",
-                "prepared_at": now,
-                "updated_at": now,
-            }
-        },
+        {"$set": {"generation_status": "completed", "status": "ready", "prepared_at": now, "updated_at": now}},
     )
 
     return {
