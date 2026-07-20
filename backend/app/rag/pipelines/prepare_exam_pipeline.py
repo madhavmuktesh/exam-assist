@@ -11,6 +11,7 @@ from app.rag.generators.question_generator import (
     extract_questions_with_llm,
 )
 from app.rag.utils.parser import extract_existing_questions
+from app.services.question_generation_service import extract_existing_questions
 
 logger = logging.getLogger(__name__)
 
