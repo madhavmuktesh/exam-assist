@@ -85,6 +85,7 @@ export default function TakeExamPage() {
   const [timerMode, setTimerMode] =
     useState<StartExamResponse["timer_mode"]>("full_exam");
   const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const [perQuestionDuration, setPerQuestionDuration] = useState(60);
 
   const [objectiveAnswers, setObjectiveAnswers] = useState<ObjectiveAnswerMap>({});
   const [descriptiveAnswers, setDescriptiveAnswers] = useState<DescriptiveAnswerMap>({});
@@ -104,8 +105,10 @@ export default function TakeExamPage() {
   const lastSyncedRemainingRef = useRef<number>(0);
   const timerHasStartedRef = useRef(false);
   const fetchInProgressRef = useRef(false);
+  const autoAdvancingRef = useRef(false);
 
   const currentQuestion = questions[currentIndex] ?? null;
+  const isPerQuestionMode = timerMode === "per_question";
 
   useEffect(() => {
     submittingRef.current = submitting;
@@ -173,16 +176,25 @@ export default function TakeExamPage() {
 
     intervalRef.current = window.setInterval(() => {
       setRemainingSeconds((prev) => {
-        if (prev <= 1) {
-          stopTimer();
-          return 0;
-        }
-        const next = prev - 1;
+        const next = Math.max(prev - 1, 0);
         lastSyncedRemainingRef.current = next;
+
+        if (next === 0) {
+          stopTimer();
+        }
+
         return next;
       });
     }, 1000);
   }, [stopTimer]);
+
+  const moveToNextQuestion = useCallback(() => {
+    setCurrentIndex((prev) => {
+      if (prev >= questions.length - 1) return prev;
+      return prev + 1;
+    });
+    setError(null);
+  }, [questions.length]);
 
   const handleSelectObjective = useCallback((questionId: string, optionId: string) => {
     setObjectiveAnswers((prev) => ({
@@ -210,59 +222,75 @@ export default function TakeExamPage() {
   const goToQuestion = useCallback(
     (index: number) => {
       if (index < 0 || index >= questions.length) return;
+
+      if (isPerQuestionMode) {
+        const onlyNext = index === currentIndex + 1;
+        if (!onlyNext) return;
+      }
+
       syncCurrentQuestionTime();
       setCurrentIndex(index);
       setError(null);
     },
-    [questions.length, syncCurrentQuestionTime],
+    [questions.length, isPerQuestionMode, currentIndex, syncCurrentQuestionTime],
   );
 
   const hydrateFromStartResponse = useCallback((data: StartExamResponse) => {
-    setQuestions(data.questions || []);
-    setTimerMode(data.timer_mode || "full_exam");
+    const resolvedQuestions = data.questions || [];
+    const resolvedTimerMode = data.timer_mode || "full_exam";
+
+    setQuestions(resolvedQuestions);
+    setTimerMode(resolvedTimerMode);
     setError(null);
     autoSubmittedRef.current = false;
     timerHasStartedRef.current = false;
+    autoAdvancingRef.current = false;
 
-    const isResuming = !!(data.resume_payload && typeof data.resume_payload.remaining_seconds === "number");
+    const resolvedPerQuestionDuration =
+      data.question_time_seconds ??
+      (data as any).exam?.question_time_seconds ??
+      60;
+
+    setPerQuestionDuration(resolvedPerQuestionDuration);
+
+    const isResuming =
+      !!data.resume_payload &&
+      typeof data.resume_payload.remaining_seconds === "number";
 
     if (isResuming) {
       const restoredObjective: ObjectiveAnswerMap = {};
       const restoredDescriptive: DescriptiveAnswerMap = {};
 
-      Object.entries(data.resume_payload!.answers ?? {}).forEach(
-        ([questionId, value]) => {
-          const question = data.questions?.find((q) => q.id === questionId);
-          if (!question) return;
+      Object.entries(data.resume_payload!.answers ?? {}).forEach(([questionId, value]) => {
+        const question = resolvedQuestions.find((q) => q.id === questionId);
+        if (!question) return;
 
-          if (question.question_type === "objective") {
-            restoredObjective[questionId] = value ? [value] : [];
-          } else {
-            restoredDescriptive[questionId] = value ?? "";
-          }
-        },
-      );
+        if (question.question_type === "objective") {
+          restoredObjective[questionId] = value ? [value] : [];
+        } else {
+          restoredDescriptive[questionId] = value ?? "";
+        }
+      });
 
       setObjectiveAnswers(restoredObjective);
       setDescriptiveAnswers(restoredDescriptive);
       setFlaggedMap(data.resume_payload!.flagged ?? {});
       setTimeTakenMap({});
-      setCurrentIndex(
-        Math.min(
-          data.resume_payload!.current_index ?? 0,
-          Math.max((data.questions?.length || 1) - 1, 0),
-        ),
+
+      const resumeIndex = Math.min(
+        data.resume_payload!.current_index ?? 0,
+        Math.max(resolvedQuestions.length - 1, 0),
       );
+
+      setCurrentIndex(resumeIndex);
 
       let safeRemaining = Math.max(0, data.resume_payload!.remaining_seconds);
 
       if (safeRemaining === 0) {
-        const resolvedTimerMode = data.timer_mode || "full_exam";
-        if (resolvedTimerMode === "full_exam" || resolvedTimerMode === "per_section") {
-          safeRemaining = (data.total_duration_minutes || 60) * 60;
-        } else {
-          safeRemaining = data.question_time_seconds || 60;
-        }
+        safeRemaining =
+          resolvedTimerMode === "per_question"
+            ? resolvedPerQuestionDuration
+            : (data.total_duration_minutes ?? (data as any).exam?.total_duration_minutes ?? 60) * 60;
       }
 
       setRemainingSeconds(safeRemaining);
@@ -274,27 +302,16 @@ export default function TakeExamPage() {
       setTimeTakenMap({});
       setCurrentIndex(0);
 
-      const resolvedTimerMode = data.timer_mode || "full_exam";
-      let initialRemaining = 0;
-
-      if (resolvedTimerMode === "full_exam" || resolvedTimerMode === "per_section") {
-        const durationMinutes = 
-          data.total_duration_minutes ?? 
-          (data as any).exam?.total_duration_minutes ??
-          (data as any).duration_minutes ?? 
-          (data as any).exam?.duration_minutes ??
-          (data as any).time_limit ?? 
-          60;
-
-        initialRemaining = durationMinutes * 60;
-      } else {
-        const questionTime = 
-          data.question_time_seconds ?? 
-          (data as any).exam?.question_time_seconds ??
-          60;
-          
-        initialRemaining = questionTime;
-      }
+      const initialRemaining =
+        resolvedTimerMode === "per_question"
+          ? resolvedPerQuestionDuration
+          : (
+              data.total_duration_minutes ??
+              (data as any).exam?.total_duration_minutes ??
+              (data as any).duration_minutes ??
+              (data as any).exam?.duration_minutes ??
+              60
+            ) * 60;
 
       setRemainingSeconds(initialRemaining);
       lastSyncedRemainingRef.current = initialRemaining;
@@ -305,7 +322,7 @@ export default function TakeExamPage() {
 
   const loadExam = useCallback(async () => {
     if (!examId || fetchInProgressRef.current) return;
-    
+
     fetchInProgressRef.current = true;
 
     try {
@@ -373,7 +390,7 @@ export default function TakeExamPage() {
     });
 
     return {
-      remaining_seconds: Math.max(0, lastSyncedRemainingRef.current || remainingSeconds),
+      remaining_seconds: Math.max(0, lastSyncedRemainingRef.current ?? remainingSeconds),
       current_index: currentIndex,
       answers: mergedAnswers,
       flagged: flaggedMap,
@@ -420,8 +437,14 @@ export default function TakeExamPage() {
 
   const handleLeaveAction = useCallback(
     async (action: LeaveAction) => {
-      if (action === "pause") { await handlePauseExam(); return; }
-      if (action === "cancel") { await handleCancelExam(); return; }
+      if (action === "pause") {
+        await handlePauseExam();
+        return;
+      }
+      if (action === "cancel") {
+        await handleCancelExam();
+        return;
+      }
       await handleSubmitExam();
     },
     [handlePauseExam, handleCancelExam, handleSubmitExam],
@@ -439,10 +462,33 @@ export default function TakeExamPage() {
 
   useEffect(() => {
     if (loading || !questions.length) return;
-    if (timerMode === "per_question") return;
+    if (timerMode !== "full_exam") return;
+
     startTimerLoop();
     return () => stopTimer();
   }, [loading, questions.length, timerMode, startTimerLoop, stopTimer]);
+
+  useEffect(() => {
+    if (loading || !questions.length) return;
+    if (timerMode !== "per_question") return;
+    if (!currentQuestion) return;
+
+    setRemainingSeconds(perQuestionDuration);
+    lastSyncedRemainingRef.current = perQuestionDuration;
+    questionEnterTimestampRef.current = Date.now();
+
+    startTimerLoop();
+    return () => stopTimer();
+  }, [
+    loading,
+    questions.length,
+    timerMode,
+    currentIndex,
+    currentQuestion,
+    perQuestionDuration,
+    startTimerLoop,
+    stopTimer,
+  ]);
 
   useEffect(() => {
     if (
@@ -450,13 +496,42 @@ export default function TakeExamPage() {
       questions.length > 0 &&
       remainingSeconds === 0 &&
       timerHasStartedRef.current &&
-      !autoSubmittedRef.current &&
       !submittingRef.current
     ) {
-      autoSubmittedRef.current = true;
-      void handleSubmitExam();
+      if (timerMode === "per_question") {
+        if (autoAdvancingRef.current) return;
+
+        autoAdvancingRef.current = true;
+        syncCurrentQuestionTime();
+
+        const isLastQuestion = currentIndex >= questions.length - 1;
+
+        if (isLastQuestion) {
+          autoSubmittedRef.current = true;
+          void handleSubmitExam();
+          return;
+        }
+
+        moveToNextQuestion();
+        autoAdvancingRef.current = false;
+        return;
+      }
+
+      if (!autoSubmittedRef.current) {
+        autoSubmittedRef.current = true;
+        void handleSubmitExam();
+      }
     }
-  }, [remainingSeconds, loading, questions.length, handleSubmitExam]);
+  }, [
+    remainingSeconds,
+    loading,
+    questions.length,
+    timerMode,
+    currentIndex,
+    syncCurrentQuestionTime,
+    moveToNextQuestion,
+    handleSubmitExam,
+  ]);
 
   useEffect(() => {
     if (!hasMountedRef.current) {
@@ -493,14 +568,29 @@ export default function TakeExamPage() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (showLeaveModal || submitting) return;
-      if (event.key === "ArrowRight") { event.preventDefault(); goToQuestion(currentIndex + 1); }
-      if (event.key === "ArrowLeft") { event.preventDefault(); goToQuestion(currentIndex - 1); }
-      if (event.key.toLowerCase() === "f") { event.preventDefault(); handleToggleFlag(); }
+
+      if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        handleToggleFlag();
+        return;
+      }
+
+      if (isPerQuestionMode) return;
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        goToQuestion(currentIndex + 1);
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        goToQuestion(currentIndex - 1);
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentIndex, showLeaveModal, submitting, goToQuestion, handleToggleFlag]);
+  }, [currentIndex, showLeaveModal, submitting, isPerQuestionMode, goToQuestion, handleToggleFlag]);
 
   if (loading) {
     return (
@@ -569,12 +659,10 @@ export default function TakeExamPage() {
     );
   }
 
-  // Low time warning styling (< 60 seconds)
   const isLowTime = remainingSeconds < 60;
 
   return (
     <div className="min-h-screen bg-slate-100 relative">
-      {/* Submitting Fullscreen Overlay to prevent any accidental clicks while uploading responses */}
       {submitting && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-xs">
           <div className="rounded-2xl bg-white px-8 py-6 shadow-2xl flex items-center gap-4">
@@ -597,8 +685,8 @@ export default function TakeExamPage() {
           </div>
           <div className="flex items-center gap-3">
             <div className={`rounded-xl px-4 py-2 text-sm font-bold shadow-xs transition-colors ${
-              isLowTime 
-                ? "bg-rose-600 text-white animate-pulse" 
+              isLowTime
+                ? "bg-rose-600 text-white animate-pulse"
                 : "bg-slate-900 text-white"
             }`}>
               ⏱️ {formatTime(remainingSeconds)}
@@ -703,11 +791,12 @@ export default function TakeExamPage() {
           <div className="flex items-center justify-between border-t border-slate-200 px-6 py-5 bg-slate-50/50 rounded-b-2xl">
             <button
               onClick={() => goToQuestion(currentIndex - 1)}
-              disabled={currentIndex === 0 || submitting}
+              disabled={currentIndex === 0 || submitting || isPerQuestionMode}
               className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-xs transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
             >
               ← Previous
             </button>
+
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowLeaveModal(true)}
@@ -716,6 +805,7 @@ export default function TakeExamPage() {
               >
                 Pause / Exit
               </button>
+
               {currentIndex < questions.length - 1 ? (
                 <button
                   onClick={() => goToQuestion(currentIndex + 1)}
@@ -774,8 +864,8 @@ export default function TakeExamPage() {
                 <button
                   key={q.id}
                   onClick={() => goToQuestion(idx)}
-                  disabled={submitting}
-                  className={`rounded-xl border py-2.5 text-sm font-medium transition focus:outline-none ${buttonClass}`}
+                  disabled={submitting || isPerQuestionMode}
+                  className={`rounded-xl border py-2.5 text-sm font-medium transition focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${buttonClass}`}
                 >
                   {idx + 1}
                 </button>
@@ -784,8 +874,24 @@ export default function TakeExamPage() {
           </div>
 
           <div className="space-y-2 text-xs text-slate-500 border-t border-slate-100 pt-4">
-            <p><span className="font-medium text-slate-700">Shortcuts:</span> Left / Right arrows to move.</p>
-            <p><span className="font-medium text-slate-700">Shortcut:</span> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono">F</kbd> to mark review.</p>
+            {isPerQuestionMode ? (
+              <>
+                <p>
+                  <span className="font-medium text-slate-700">Mode:</span> Per-question timer is active.
+                </p>
+                <p>
+                  <span className="font-medium text-slate-700">Navigation:</span> Only forward flow is allowed.
+                </p>
+                <p>
+                  <span className="font-medium text-slate-700">Time:</span> Each question gets {perQuestionDuration} seconds.
+                </p>
+              </>
+            ) : (
+              <>
+                <p><span className="font-medium text-slate-700">Shortcuts:</span> Left / Right arrows to move.</p>
+                <p><span className="font-medium text-slate-700">Shortcut:</span> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono">F</kbd> to mark review.</p>
+              </>
+            )}
           </div>
 
           <button
