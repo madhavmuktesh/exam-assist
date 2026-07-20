@@ -38,6 +38,18 @@ htmlcov/
 .env.development.local
 .env.test.local
 .env.production.local
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# =========================
+# Docker Compose secrets / overrides
+# =========================
+docker-compose.override.yml
+docker-compose.prod.yml
+docker-compose.secrets.yml
+*.override.yml
+docker-compose.yml
 
 # =========================
 # Node / Next.js

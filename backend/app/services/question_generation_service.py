@@ -30,21 +30,32 @@ client = OpenAI(
 
 
 def chunk_text(text: str, chunk_size: int = 4000) -> list[str]:
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not text:
         return []
 
+    # Try to split on question boundaries first (Q1. / 1. / Question 1)
+    question_splits = re.split(
+        r"(?=(?:Q(?:uestion)?\s*\.?\s*\d+|\d+\s*[\).:-])\s)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     chunks = []
-    start = 0
+    current_chunk = ""
 
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        start = end
+    for segment in question_splits:
+        if len(current_chunk) + len(segment) <= chunk_size:
+            current_chunk += segment
+        else:
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+            current_chunk = segment
 
-    return chunks
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return chunks if chunks else [text[:chunk_size]]
 
 
 def build_generation_prompt(
@@ -106,9 +117,14 @@ def build_extraction_prompt(
     difficulty: str,
 ) -> str:
     return f"""
-You are an expert data extractor. I am providing you with the raw text of an uploaded question paper.
-Your task is to accurately EXTRACT the existing questions and their options from this text.
-Do NOT generate or invent new questions. Only extract what is explicitly there.
+You are an expert exam paper parser. The source text was extracted from a PDF and may contain:
+- Multi-column merge artifacts (words from two columns on the same line)
+- Extra whitespace, line breaks mid-sentence
+- Garbled option labels
+
+Your job is to RECONSTRUCT clean, complete questions by intelligently parsing the noisy text.
+Fix broken sentences that are clearly the same question split across columns.
+Do NOT generate or invent new questions. Only extract and reconstruct what is explicitly there.
 
 Return valid JSON only in this format:
 {{
@@ -135,7 +151,7 @@ Rules:
 - If a question has no options, mark it as "descriptive".
 - If the text contains an answer key (e.g., "Ans.(C)", "Answer: A"), put that letter in `correct_option_ids`.
 - Every question must include `marks`.
-- Maintain the original wording of the questions as closely as possible.
+- Maintain the original meaning of the questions, but FIX formatting artifacts, split lines, and garbled text.
 - Do not include markdown fences. Return JSON only.
 
 Source material:
@@ -493,14 +509,18 @@ def extract_existing_questions(
     next_q_num = 1
 
     question_pattern = re.compile(
-        r"^(?:Q(?:uestion)?\s*\.?\s*(\d+)|(\d+))\s*[\).:-](?:\s+(.*))?$",
+        r"^(?:Q(?:uestion)?\s*\.?\s*)?(\d{1,3})\s*[\.)\-:]\s+(.+)",
         re.IGNORECASE,
     )
 
-    option_pattern = re.compile(r"^[\(]?([A-Fa-f1-6])[\).]\s+(.*)", re.IGNORECASE)
-    answer_pattern = re.compile(
-        r"^(?:Ans\.?|Answer)\s*[\(:-]?\s*([A-Fa-f1-6])[\)]?",
+    option_pattern = re.compile(
+        r"^[\(\[]?\s*([A-Da-d1-4])\s*[\)\]\.]\s+(.+)",
         re.IGNORECASE,
+    )
+
+    answer_pattern = re.compile(
+        r"(?:Ans(?:wer)?\s*[\.:\(]?\s*|^\s*)([A-Da-d])\s*[\).]?\s*$",
+        re.IGNORECASE | re.MULTILINE,
     )
 
     opt_map = {
@@ -536,7 +556,8 @@ def extract_existing_questions(
             q_num_str = q_match.group(1) or q_match.group(2)
             q_num = int(q_num_str)
 
-            if current_question is None or (next_q_num <= q_num <= next_q_num + 5):
+            
+            if current_question is None or q_num >= next_q_num - 1: 
                 is_new_question = True
                 next_q_num = q_num + 1
                 q_text = (q_match.group(3) or "").strip()
