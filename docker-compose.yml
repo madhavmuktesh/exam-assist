@@ -28,12 +28,19 @@ services:
       MONGODB_URI: mongodb://mongo:27017
       MONGODB_DB_NAME: exam_assistant
     volumes:
-      - uploads_data:/app/uploads   # ← files persist across restarts
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     container_name: exam_frontend
     restart: unless-stopped
     ports:
@@ -41,7 +48,7 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: http://backend:8000
+      BACKEND_URL: http://backend:8000
 
 volumes:
   mongo_data:
