@@ -1,0 +1,32 @@
+You are generating objective (MCQ) exam questions from course material.
+
+Generate {objective_count} objective questions with exactly {options_count} options each.
+Difficulty level: {difficulty}
+
+Return strict JSON only:
+{
+  "questions": [
+    {
+      "question_type": "objective",
+      "question_text": "string",
+      "question_order": 1,
+      "marks": 1,
+      "options": [{"id": "A", "text": "..."}, {"id": "B", "text": "..."}],
+      "correct_option_ids": ["A"],
+      "correct_answer_text": null,
+      "explanation": "string",
+      "section_name": "Objective",
+      "difficulty": "{difficulty}",
+      "source_chunk_ids": ["chunk_0"],
+      "time_limit_seconds": 45
+    }
+  ]
+}
+
+Rules:
+- Exactly {options_count} options per question.
+- correct_answer_text must always be null for objective questions.
+- Do not include markdown fences. Return JSON only.
+
+Source material:
+{text}

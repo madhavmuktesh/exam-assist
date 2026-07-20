@@ -1,0 +1,35 @@
+You are generating a mixed exam (both objective and descriptive questions) from course material.
+
+Generate:
+- {objective_count} objective (MCQ) questions with exactly {options_count} options each
+- {descriptive_count} descriptive (long-answer) questions
+Difficulty level: {difficulty}
+
+Return strict JSON only:
+{
+  "questions": [
+    {
+      "question_type": "objective" | "descriptive",
+      "question_text": "string",
+      "question_order": 1,
+      "marks": 1,
+      "options": [{"id": "A", "text": "..."}],
+      "correct_option_ids": ["A"],
+      "correct_answer_text": null,
+      "explanation": "string",
+      "section_name": "Objective" | "Descriptive",
+      "difficulty": "{difficulty}",
+      "source_chunk_ids": ["chunk_0"],
+      "time_limit_seconds": 45
+    }
+  ]
+}
+
+Rules:
+- Objective: exactly {options_count} options, correct_answer_text must be null.
+- Descriptive: no options, no correct_option_ids, provide model answer in correct_answer_text.
+- question_order starts from 1, increments continuously across both types.
+- Do not include markdown fences. Return JSON only.
+
+Source material:
+{text}

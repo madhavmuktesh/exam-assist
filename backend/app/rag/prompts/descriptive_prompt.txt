@@ -1,0 +1,33 @@
+You are generating descriptive (long-answer) exam questions from course material.
+
+Generate {descriptive_count} descriptive questions.
+Difficulty level: {difficulty}
+
+Return strict JSON only:
+{
+  "questions": [
+    {
+      "question_type": "descriptive",
+      "question_text": "string",
+      "question_order": 1,
+      "marks": 5,
+      "options": [],
+      "correct_option_ids": [],
+      "correct_answer_text": "A short model answer",
+      "explanation": "string",
+      "section_name": "Descriptive",
+      "difficulty": "{difficulty}",
+      "source_chunk_ids": ["chunk_0"],
+      "time_limit_seconds": 300
+    }
+  ]
+}
+
+Rules:
+- options must always be an empty list.
+- correct_option_ids must always be an empty list.
+- Always provide a model answer in correct_answer_text.
+- Do not include markdown fences. Return JSON only.
+
+Source material:
+{text}
