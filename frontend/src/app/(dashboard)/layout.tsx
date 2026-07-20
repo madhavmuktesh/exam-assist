@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { createContext, useMemo, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useauth";
 import { login, register } from "@/features/auth/api";
 
@@ -28,7 +28,7 @@ function getApiErrorMessage(error: any, fallback = "Something went wrong.") {
 }
 
 function navLinkClass(active: boolean) {
-  return `transition-colors ${
+  return `transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 rounded-md px-2 py-1 ${
     active
       ? "text-slate-900 font-semibold"
       : "text-slate-500 hover:text-slate-800"
@@ -41,7 +41,10 @@ export default function DashboardLayout({
   children: ReactNode;
 }) {
   const pathname = usePathname();
-  const { user, loading, logout } = useAuth();
+  const router = useRouter();
+  
+  // FIX 1: We grab refreshUser from context so we don't have to hard-reload the page!
+  const { user, loading, logout, refreshUser } = useAuth();
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -60,18 +63,15 @@ export default function DashboardLayout({
   const handleLogout = async () => {
     try {
       await logout();
+      // logout function in your api.ts already handles localStorage and redirects, 
+      // so we don't need to manually duplicate that logic here.
     } catch (e) {
-      console.error(e);
+      console.error("Logout failed:", e);
     }
-
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("user_name");
-    window.location.href = "/";
   };
 
   const openModal = () => {
     if (isExamAttemptPage) return;
-
     setAuthMode("login");
     setError(null);
     setShowAuthModal(true);
@@ -92,8 +92,11 @@ export default function DashboardLayout({
     try {
       if (authMode === "login") {
         await login({ email, password });
+        
+        // FIX 2: Seamlessly fetch the user data into React Context without a hard refresh
+        await refreshUser(); 
         setShowAuthModal(false);
-        window.location.reload();
+        router.refresh(); // Tells Next.js to quietly update any server components
       } else {
         await register({
           full_name: fullName,
@@ -125,7 +128,7 @@ export default function DashboardLayout({
             <div className="max-w-6xl mx-auto px-4 sm:px-6">
               <div className="flex min-h-[72px] items-center justify-between gap-4">
                 <div className="flex items-center gap-8">
-                  <Link href="/" className="flex items-center gap-3">
+                  <Link href="/" className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 rounded-xl">
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800 text-white text-sm font-bold shadow-sm">
                       EA
                     </div>
@@ -148,9 +151,7 @@ export default function DashboardLayout({
                     <Link
                       href="/exams/create"
                       onClick={handleRestrictedNav}
-                      className={navLinkClass(
-                        !!pathname?.startsWith("/exams/create"),
-                      )}
+                      className={navLinkClass(!!pathname?.startsWith("/exams/create"))}
                     >
                       Create Exam
                     </Link>
@@ -166,9 +167,7 @@ export default function DashboardLayout({
                     {user && (
                       <Link
                         href="/profile"
-                        className={navLinkClass(
-                          !!pathname?.startsWith("/profile"),
-                        )}
+                        className={navLinkClass(!!pathname?.startsWith("/profile"))}
                       >
                         Profile
                       </Link>
@@ -177,7 +176,16 @@ export default function DashboardLayout({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {!loading && user ? (
+                  {/* FIX 3: Add a Skeleton Loader so the header doesn't flash "Guest access" on load */}
+                  {loading ? (
+                    <div className="flex items-center gap-3">
+                      <div className="hidden sm:flex flex-col items-end gap-1">
+                        <div className="h-4 w-24 animate-pulse rounded bg-slate-200"></div>
+                        <div className="h-3 w-16 animate-pulse rounded bg-slate-100"></div>
+                      </div>
+                      <div className="h-9 w-20 animate-pulse rounded-lg bg-slate-200"></div>
+                    </div>
+                  ) : user ? (
                     <>
                       <div className="hidden sm:flex flex-col items-end">
                         <span className="text-sm font-medium text-slate-800">
@@ -190,7 +198,7 @@ export default function DashboardLayout({
 
                       <button
                         onClick={handleLogout}
-                        className="inline-flex items-center justify-center px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 transition-colors"
+                        className="inline-flex items-center justify-center px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                       >
                         Logout
                       </button>
@@ -203,7 +211,7 @@ export default function DashboardLayout({
 
                       <button
                         onClick={openModal}
-                        className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm"
+                        className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
                       >
                         Sign In
                       </button>
@@ -219,9 +227,15 @@ export default function DashboardLayout({
           {children}
         </main>
 
+        {/* FIX 4: Close modal if user clicks the dark backdrop outside the modal */}
         {!isExamAttemptPage && showAuthModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setShowAuthModal(false);
+            }}
+          >
+            <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-in fade-in zoom-in-95 duration-200">
               <div className="border-b border-slate-100 px-6 py-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -237,7 +251,8 @@ export default function DashboardLayout({
 
                   <button
                     onClick={() => setShowAuthModal(false)}
-                    className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+                    aria-label="Close modal"
+                    className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
                   >
                     ✕
                   </button>
@@ -254,9 +269,10 @@ export default function DashboardLayout({
                       <input
                         type="text"
                         required
+                        disabled={authLoading}
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
                         placeholder="Enter your full name"
                       />
                     </div>
@@ -268,9 +284,10 @@ export default function DashboardLayout({
                       <input
                         type="tel"
                         required
+                        disabled={authLoading}
                         value={phoneNumber}
                         onChange={(e) => setPhoneNumber(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
                         placeholder="Enter your phone number"
                       />
                     </div>
@@ -284,9 +301,10 @@ export default function DashboardLayout({
                   <input
                     type="email"
                     required
+                    disabled={authLoading}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Enter your email"
                   />
                 </div>
@@ -298,9 +316,10 @@ export default function DashboardLayout({
                   <input
                     type="password"
                     required
+                    disabled={authLoading}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
                     placeholder="Enter your password"
                   />
                 </div>
@@ -310,7 +329,7 @@ export default function DashboardLayout({
                     className={`rounded-lg px-4 py-3 text-sm font-medium ${
                       error.toLowerCase().includes("successful")
                         ? "border border-green-200 bg-green-50 text-green-700"
-                        : "border border-red-200 bg-red-50 text-red-700"
+                        : "border border-rose-200 bg-rose-50 text-rose-700"
                     }`}
                   >
                     {error}
@@ -320,8 +339,15 @@ export default function DashboardLayout({
                 <button
                   type="submit"
                   disabled={authLoading}
-                  className="w-full rounded-lg bg-slate-800 py-2.5 text-white font-medium shadow-sm transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 py-2.5 text-white font-medium shadow-sm transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
                 >
+                  {/* FIX 5: Proper Loading indicator in the button */}
+                  {authLoading && (
+                    <svg className="h-4 w-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  )}
                   {authLoading
                     ? "Processing..."
                     : authMode === "login"
@@ -336,11 +362,12 @@ export default function DashboardLayout({
                     Don&apos;t have an account?{" "}
                     <button
                       type="button"
+                      disabled={authLoading}
                       onClick={() => {
                         setAuthMode("register");
                         setError(null);
                       }}
-                      className="font-semibold text-slate-800 hover:underline"
+                      className="font-semibold text-slate-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 rounded disabled:opacity-50"
                     >
                       Register here
                     </button>
@@ -350,11 +377,12 @@ export default function DashboardLayout({
                     Already have an account?{" "}
                     <button
                       type="button"
+                      disabled={authLoading}
                       onClick={() => {
                         setAuthMode("login");
                         setError(null);
                       }}
-                      className="font-semibold text-slate-800 hover:underline"
+                      className="font-semibold text-slate-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 rounded disabled:opacity-50"
                     >
                       Sign in
                     </button>

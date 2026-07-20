@@ -101,24 +101,29 @@ def get_exam_or_404(db, exam_id: str, user_id: str):
 def build_resume_payload_for_exam(exam: dict):
     now = datetime.now(timezone.utc)
 
-    last_active_at = ensure_utc_aware(
-        exam.get("resumed_at")
-        or exam.get("paused_at")
-        or exam.get("started_at")
-        or exam.get("updated_at")
-    )
+    # FIX 1: Look inside "attempt_snapshot" where the pause route actually saves the data
+    snapshot = exam.get("attempt_snapshot", {})
+    
+    remaining_seconds = snapshot.get("remaining_seconds", 0)
 
-    remaining_seconds = exam.get("remaining_seconds", 0)
-
-    if last_active_at is not None:
-        elapsed_seconds = max(0, int((now - last_active_at).total_seconds()))
-        remaining_seconds = max(0, remaining_seconds - elapsed_seconds)
+    # FIX 2: Only subtract elapsed time if the exam was actively running (e.g., tab closed unexpectedly)
+    # If the exam is safely "paused", we freeze the timer exactly where they left it.
+    if exam.get("status") == "in_progress":
+        last_active_at = ensure_utc_aware(
+            exam.get("resumed_at")
+            or exam.get("started_at")
+            or exam.get("updated_at")
+        )
+        
+        if last_active_at is not None:
+            elapsed_seconds = max(0, int((now - last_active_at).total_seconds()))
+            remaining_seconds = max(0, remaining_seconds - elapsed_seconds)
 
     return {
         "remaining_seconds": remaining_seconds,
-        "current_index": exam.get("current_index", 0),
-        "answers": exam.get("answers", {}),
-        "flagged": exam.get("flagged", {}),
+        "current_index": snapshot.get("current_index", 0),
+        "answers": snapshot.get("answers", {}),
+        "flagged": snapshot.get("flagged", {}),
     }
 
 @router.post("", response_model=ExamResponse, status_code=status.HTTP_201_CREATED)

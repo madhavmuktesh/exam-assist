@@ -33,6 +33,7 @@ export default function CreateExamPage() {
   const [instructions, setInstructions] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [uploadStep, setUploadStep] = useState<string>("");
 
   const [customizeExtraction, setCustomizeExtraction] = useState(false);
 
@@ -86,6 +87,7 @@ export default function CreateExamPage() {
       let pdfFilename: string | null = null;
 
       if (sourceType === "pdf" && file) {
+        setUploadStep("Uploading PDF file...");
         const formData = new FormData();
         formData.append("file", file);
 
@@ -99,6 +101,12 @@ export default function CreateExamPage() {
 
         pdfFilename = uploadRes.data.pdf_filename;
       }
+
+      setUploadStep(
+        inputMode === "generate_from_content"
+          ? "Generating AI questions from content..."
+          : "Extracting questions from paper..."
+      );
 
       const payload: ExamCreatePayload = {
         title: title.trim(),
@@ -132,8 +140,8 @@ export default function CreateExamPage() {
       } else {
         setError(message);
       }
-    } finally {
       setLoading(false);
+      setUploadStep("");
     }
   }
 
@@ -196,10 +204,11 @@ export default function CreateExamPage() {
             </label>
             <input
               type="text"
+              disabled={loading}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Enter exam title"
-              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
               required
             />
           </div>
@@ -210,10 +219,11 @@ export default function CreateExamPage() {
             </label>
             <textarea
               rows={4}
+              disabled={loading}
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               placeholder="Add any special instructions, rules, or notes for this exam"
-              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-800 outline-none resize-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-800 outline-none resize-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
             />
           </div>
         </div>
@@ -233,11 +243,12 @@ export default function CreateExamPage() {
                 inputMode === "generate_from_content"
                   ? "border-slate-800 bg-slate-50"
                   : "border-slate-200 bg-white hover:bg-slate-50"
-              }`}
+              } ${loading ? "opacity-60 cursor-not-allowed" : ""}`}
             >
               <div className="flex items-start gap-3">
                 <input
                   type="radio"
+                  disabled={loading}
                   checked={inputMode === "generate_from_content"}
                   onChange={() => {
                     setInputMode("generate_from_content");
@@ -261,11 +272,12 @@ export default function CreateExamPage() {
                 inputMode === "extract_existing_questions"
                   ? "border-slate-800 bg-slate-50"
                   : "border-slate-200 bg-white hover:bg-slate-50"
-              }`}
+              } ${loading ? "opacity-60 cursor-not-allowed" : ""}`}
             >
               <div className="flex items-start gap-3">
                 <input
                   type="radio"
+                  disabled={loading}
                   checked={inputMode === "extract_existing_questions"}
                   onChange={() => setInputMode("extract_existing_questions")}
                   className="mt-1"
@@ -287,6 +299,7 @@ export default function CreateExamPage() {
               <label className="flex items-start gap-3 text-sm text-amber-800 cursor-pointer">
                 <input
                   type="checkbox"
+                  disabled={loading}
                   checked={customizeExtraction}
                   onChange={(e) => setCustomizeExtraction(e.target.checked)}
                   className="mt-0.5 h-4 w-4"
@@ -306,9 +319,10 @@ export default function CreateExamPage() {
               </label>
               <input
                 type="file"
+                disabled={loading}
                 accept="application/pdf"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-4 file:rounded-md file:border-0 file:bg-slate-800 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-700"
+                className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-4 file:rounded-md file:border-0 file:bg-slate-800 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-700 disabled:opacity-50"
               />
               {file && (
                 <p className="mt-2 text-sm text-slate-500">
@@ -347,7 +361,7 @@ export default function CreateExamPage() {
                 min={0}
                 value={shouldDisableSettings ? "" : objectiveCount}
                 onChange={(e) => setObjectiveCount(Number(e.target.value))}
-                disabled={shouldDisableSettings}
+                disabled={shouldDisableSettings || loading}
                 placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
                 className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
               />
@@ -362,7 +376,7 @@ export default function CreateExamPage() {
                 min={0}
                 value={shouldDisableSettings ? "" : descriptiveCount}
                 onChange={(e) => setDescriptiveCount(Number(e.target.value))}
-                disabled={shouldDisableSettings}
+                disabled={shouldDisableSettings || loading}
                 placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
                 className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
               />
@@ -378,7 +392,7 @@ export default function CreateExamPage() {
                 max={6}
                 value={shouldDisableSettings ? "" : optionsCount}
                 onChange={(e) => setOptionsCount(Number(e.target.value))}
-                disabled={shouldDisableSettings}
+                disabled={shouldDisableSettings || loading}
                 placeholder={shouldDisableSettings ? "Auto-extracted" : ""}
                 className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
               />
@@ -391,7 +405,7 @@ export default function CreateExamPage() {
               <select
                 value={difficulty}
                 onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-                disabled={shouldDisableSettings}
+                disabled={shouldDisableSettings || loading}
                 className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
               >
                 <option value="easy">Easy</option>
@@ -416,8 +430,9 @@ export default function CreateExamPage() {
             </label>
             <select
               value={timerMode}
+              disabled={loading}
               onChange={(e) => setTimerMode(e.target.value as TimerMode)}
-              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100"
             >
               <option value="full_exam">Single exam timer</option>
               <option value="per_question">Per question</option>
@@ -433,9 +448,10 @@ export default function CreateExamPage() {
                 <input
                   type="number"
                   min={5}
+                  disabled={loading}
                   value={durationMinutes}
                   onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100"
                 />
               </div>
             )}
@@ -448,9 +464,10 @@ export default function CreateExamPage() {
                 <input
                   type="number"
                   min={5}
+                  disabled={loading}
                   value={questionTimeSeconds}
                   onChange={(e) => setQuestionTimeSeconds(Number(e.target.value))}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-800 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100"
                 />
               </div>
             )}
@@ -458,7 +475,7 @@ export default function CreateExamPage() {
         </div>
 
         {error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 shadow-sm">
             {error}
           </div>
         )}
@@ -467,16 +484,22 @@ export default function CreateExamPage() {
           <button
             type="submit"
             disabled={loading}
-            className="inline-flex items-center justify-center px-5 py-2.5 rounded-lg bg-slate-800 text-white font-medium hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white font-medium hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
           >
-            {loading ? "Creating exam..." : "Create exam"}
+            {loading && (
+              <svg className="h-4 w-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            )}
+            {loading ? (uploadStep || "Creating exam...") : "Create exam"}
           </button>
 
           <button
             type="button"
             onClick={() => router.back()}
             disabled={loading}
-            className="inline-flex items-center justify-center px-5 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center px-5 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
           >
             Cancel
           </button>

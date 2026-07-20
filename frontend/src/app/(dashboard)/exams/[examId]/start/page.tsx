@@ -102,8 +102,8 @@ export default function TakeExamPage() {
   const questionEnterTimestampRef = useRef<number>(Date.now());
   const intervalRef = useRef<number | null>(null);
   const lastSyncedRemainingRef = useRef<number>(0);
-  // FIX 1: Track whether timer was ever started with a real duration
   const timerHasStartedRef = useRef(false);
+  const fetchInProgressRef = useRef(false);
 
   const currentQuestion = questions[currentIndex] ?? null;
 
@@ -169,7 +169,6 @@ export default function TakeExamPage() {
 
   const startTimerLoop = useCallback(() => {
     stopTimer();
-    // FIX 2: Mark timer as properly started
     timerHasStartedRef.current = true;
 
     intervalRef.current = window.setInterval(() => {
@@ -219,20 +218,21 @@ export default function TakeExamPage() {
   );
 
   const hydrateFromStartResponse = useCallback((data: StartExamResponse) => {
-    setQuestions(data.questions);
-    setTimerMode(data.timer_mode);
+    setQuestions(data.questions || []);
+    setTimerMode(data.timer_mode || "full_exam");
     setError(null);
     autoSubmittedRef.current = false;
-    // FIX 3: Reset timer-started flag on every exam load
     timerHasStartedRef.current = false;
 
-    if (data.resume_payload) {
+    const isResuming = !!(data.resume_payload && typeof data.resume_payload.remaining_seconds === "number");
+
+    if (isResuming) {
       const restoredObjective: ObjectiveAnswerMap = {};
       const restoredDescriptive: DescriptiveAnswerMap = {};
 
-      Object.entries(data.resume_payload.answers ?? {}).forEach(
+      Object.entries(data.resume_payload!.answers ?? {}).forEach(
         ([questionId, value]) => {
-          const question = data.questions.find((q) => q.id === questionId);
+          const question = data.questions?.find((q) => q.id === questionId);
           if (!question) return;
 
           if (question.question_type === "objective") {
@@ -245,19 +245,25 @@ export default function TakeExamPage() {
 
       setObjectiveAnswers(restoredObjective);
       setDescriptiveAnswers(restoredDescriptive);
-      setFlaggedMap(data.resume_payload.flagged ?? {});
+      setFlaggedMap(data.resume_payload!.flagged ?? {});
       setTimeTakenMap({});
       setCurrentIndex(
         Math.min(
-          data.resume_payload.current_index ?? 0,
-          Math.max(data.questions.length - 1, 0),
+          data.resume_payload!.current_index ?? 0,
+          Math.max((data.questions?.length || 1) - 1, 0),
         ),
       );
 
-      const safeRemaining =
-        data.timer_mode === "full_exam" || data.timer_mode === "per_section"
-          ? data.resume_payload.remaining_seconds ?? 0
-          : data.question_time_seconds ?? 0;
+      let safeRemaining = Math.max(0, data.resume_payload!.remaining_seconds);
+
+      if (safeRemaining === 0) {
+        const resolvedTimerMode = data.timer_mode || "full_exam";
+        if (resolvedTimerMode === "full_exam" || resolvedTimerMode === "per_section") {
+          safeRemaining = (data.total_duration_minutes || 60) * 60;
+        } else {
+          safeRemaining = data.question_time_seconds || 60;
+        }
+      }
 
       setRemainingSeconds(safeRemaining);
       lastSyncedRemainingRef.current = safeRemaining;
@@ -268,10 +274,27 @@ export default function TakeExamPage() {
       setTimeTakenMap({});
       setCurrentIndex(0);
 
-      const initialRemaining =
-        data.timer_mode === "full_exam" || data.timer_mode === "per_section"
-          ? (data.total_duration_minutes ?? 0) * 60
-          : data.question_time_seconds ?? 0;
+      const resolvedTimerMode = data.timer_mode || "full_exam";
+      let initialRemaining = 0;
+
+      if (resolvedTimerMode === "full_exam" || resolvedTimerMode === "per_section") {
+        const durationMinutes = 
+          data.total_duration_minutes ?? 
+          (data as any).exam?.total_duration_minutes ??
+          (data as any).duration_minutes ?? 
+          (data as any).exam?.duration_minutes ??
+          (data as any).time_limit ?? 
+          60;
+
+        initialRemaining = durationMinutes * 60;
+      } else {
+        const questionTime = 
+          data.question_time_seconds ?? 
+          (data as any).exam?.question_time_seconds ??
+          60;
+          
+        initialRemaining = questionTime;
+      }
 
       setRemainingSeconds(initialRemaining);
       lastSyncedRemainingRef.current = initialRemaining;
@@ -281,7 +304,9 @@ export default function TakeExamPage() {
   }, []);
 
   const loadExam = useCallback(async () => {
-    if (!examId) return;
+    if (!examId || fetchInProgressRef.current) return;
+    
+    fetchInProgressRef.current = true;
 
     try {
       setLoading(true);
@@ -292,6 +317,7 @@ export default function TakeExamPage() {
       setError(getApiErrorMessage(err, "Failed to load exam."));
     } finally {
       setLoading(false);
+      fetchInProgressRef.current = false;
     }
   }, [examId, hydrateFromStartResponse]);
 
@@ -320,8 +346,8 @@ export default function TakeExamPage() {
       router.replace(`/exams/${examId}/result`);
     } catch (err: any) {
       setError(getApiErrorMessage(err, "Failed to submit exam."));
-    } finally {
       setSubmitting(false);
+    } finally {
       setShowLeaveModal(false);
     }
   }, [
@@ -365,11 +391,11 @@ export default function TakeExamPage() {
       await pauseExam(examId, buildPausePayload());
       allowNavigationRef.current = true;
       stopTimer();
-      router.replace("/exams/history");
+      router.replace("/history");
     } catch (err: any) {
       setError(getApiErrorMessage(err, "Failed to pause exam."));
-    } finally {
       setSubmitting(false);
+    } finally {
       setShowLeaveModal(false);
     }
   }, [examId, buildPausePayload, router, syncCurrentQuestionTime, stopTimer]);
@@ -383,11 +409,11 @@ export default function TakeExamPage() {
       await cancelExam(examId);
       allowNavigationRef.current = true;
       stopTimer();
-      router.replace("/exams/history");
+      router.replace("/history");
     } catch (err: any) {
       setError(getApiErrorMessage(err, "Failed to cancel exam."));
-    } finally {
       setSubmitting(false);
+    } finally {
       setShowLeaveModal(false);
     }
   }, [examId, router, stopTimer]);
@@ -418,7 +444,6 @@ export default function TakeExamPage() {
     return () => stopTimer();
   }, [loading, questions.length, timerMode, startTimerLoop, stopTimer]);
 
-  // FIX 4: Guard auto-submit — only fire if timer actually ran
   useEffect(() => {
     if (
       !loading &&
@@ -467,7 +492,7 @@ export default function TakeExamPage() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (showLeaveModal) return;
+      if (showLeaveModal || submitting) return;
       if (event.key === "ArrowRight") { event.preventDefault(); goToQuestion(currentIndex + 1); }
       if (event.key === "ArrowLeft") { event.preventDefault(); goToQuestion(currentIndex - 1); }
       if (event.key.toLowerCase() === "f") { event.preventDefault(); handleToggleFlag(); }
@@ -475,25 +500,23 @@ export default function TakeExamPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentIndex, showLeaveModal, goToQuestion, handleToggleFlag]);
+  }, [currentIndex, showLeaveModal, submitting, goToQuestion, handleToggleFlag]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 px-6 py-10">
-        <div className="mx-auto max-w-7xl">
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-            <p className="text-sm text-slate-500">Loading exam...</p>
-          </div>
+      <div className="min-h-screen bg-slate-50 px-6 py-10 flex items-center justify-center">
+        <div className="mx-auto max-w-md w-full rounded-2xl border border-slate-200 bg-white p-8 shadow-sm text-center space-y-4">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-slate-800 border-t-transparent"></div>
+          <p className="text-sm font-medium text-slate-600">Loading your exam session...</p>
         </div>
       </div>
     );
   }
 
-  // FIX 5: Error screen now has a "Go Back" button — no more getting stuck
   if (error && !questions.length) {
     return (
-      <div className="min-h-screen bg-slate-50 px-6 py-10">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-rose-200 bg-white p-8 shadow-sm">
+      <div className="min-h-screen bg-slate-50 px-6 py-10 flex items-center justify-center">
+        <div className="mx-auto max-w-xl rounded-2xl border border-rose-200 bg-white p-8 shadow-sm">
           <h1 className="text-xl font-semibold text-slate-900">
             Unable to load exam
           </h1>
@@ -504,13 +527,13 @@ export default function TakeExamPage() {
                 allowNavigationRef.current = true;
                 router.replace("/");
               }}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
             >
-              ← Go Back
+              ← Go Home
             </button>
             <button
               onClick={loadExam}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
             >
               Retry
             </button>
@@ -524,8 +547,8 @@ export default function TakeExamPage() {
 
   if (!currentQ) {
     return (
-      <div className="min-h-screen bg-slate-50 px-6 py-10">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+      <div className="min-h-screen bg-slate-50 px-6 py-10 flex items-center justify-center">
+        <div className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <h1 className="text-xl font-semibold text-slate-900">
             No questions found
           </h1>
@@ -537,32 +560,53 @@ export default function TakeExamPage() {
               allowNavigationRef.current = true;
               router.replace("/");
             }}
-            className="mt-6 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="mt-6 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
           >
-            ← Go Back
+            ← Go Home
           </button>
         </div>
       </div>
     );
   }
 
+  // Low time warning styling (< 60 seconds)
+  const isLowTime = remainingSeconds < 60;
+
   return (
-    <div className="min-h-screen bg-slate-100">
-      <div className="border-b border-slate-200 bg-white">
+    <div className="min-h-screen bg-slate-100 relative">
+      {/* Submitting Fullscreen Overlay to prevent any accidental clicks while uploading responses */}
+      {submitting && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-xs">
+          <div className="rounded-2xl bg-white px-8 py-6 shadow-2xl flex items-center gap-4">
+            <svg className="h-6 w-6 animate-spin text-slate-800" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span className="text-base font-semibold text-slate-800">Submitting exam responses...</span>
+          </div>
+        </div>
+      )}
+
+      <div className="border-b border-slate-200 bg-white sticky top-0 z-10">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-6 py-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Exam Workspace</h1>
             <p className="text-sm text-slate-500">
-              Question {currentIndex + 1}/{questions.length}
+              Question {currentIndex + 1} of {questions.length}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-              {formatTime(remainingSeconds)}
+            <div className={`rounded-xl px-4 py-2 text-sm font-bold shadow-xs transition-colors ${
+              isLowTime 
+                ? "bg-rose-600 text-white animate-pulse" 
+                : "bg-slate-900 text-white"
+            }`}>
+              ⏱️ {formatTime(remainingSeconds)}
             </div>
             <button
               onClick={() => setShowLeaveModal(true)}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              disabled={submitting}
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:opacity-50"
             >
               Exit options
             </button>
@@ -571,113 +615,120 @@ export default function TakeExamPage() {
       </div>
 
       <div className="mx-auto grid max-w-[1600px] grid-cols-1 gap-6 px-6 py-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <main className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-6 py-5">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-slate-500">
-                  Question {currentIndex + 1}
-                </p>
-                <h2 className="text-2xl font-semibold text-slate-900">
-                  {currentQ.question_type === "objective" ? "Multiple Choice" : "Descriptive"}
-                </h2>
+        <main className="rounded-2xl border border-slate-200 bg-white shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="border-b border-slate-200 px-6 py-5">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-slate-500">
+                    Question {currentIndex + 1}
+                  </p>
+                  <h2 className="text-2xl font-semibold text-slate-900">
+                    {currentQ.question_type === "objective" ? "Multiple Choice" : "Descriptive"}
+                  </h2>
+                </div>
+                <button
+                  onClick={handleToggleFlag}
+                  disabled={submitting}
+                  className={`rounded-xl border px-4 py-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 ${
+                    flaggedMap[currentQ.id]
+                      ? "border-amber-300 bg-amber-50 text-amber-700 font-semibold"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {flaggedMap[currentQ.id] ? "★ Marked for review" : "☆ Mark for review"}
+                </button>
               </div>
-              <button
-                onClick={handleToggleFlag}
-                className={`rounded-xl border px-4 py-2 text-sm font-medium ${
-                  flaggedMap[currentQ.id]
-                    ? "border-amber-300 bg-amber-50 text-amber-700"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {flaggedMap[currentQ.id] ? "Marked for review" : "Mark for review"}
-              </button>
+            </div>
+
+            <div className="px-6 py-8">
+              {error ? (
+                <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {error}
+                </div>
+              ) : null}
+
+              <p className="mb-8 whitespace-pre-wrap text-lg leading-8 text-slate-800 font-medium">
+                {currentQ.question_text}
+              </p>
+
+              {currentQ.question_type === "objective" ? (
+                <div className="space-y-4">
+                  {currentQ.options.map((option) => {
+                    const checked = (objectiveAnswers[currentQ.id] ?? []).includes(option.id);
+                    return (
+                      <label
+                        key={option.id}
+                        className={`flex cursor-pointer items-start gap-4 rounded-2xl border px-5 py-4 transition ${
+                          checked
+                            ? "border-emerald-300 bg-emerald-50/70 shadow-xs"
+                            : "border-slate-200 bg-white hover:border-slate-300"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name={`question-${currentQ.id}`}
+                          checked={checked}
+                          disabled={submitting}
+                          onChange={() => handleSelectObjective(currentQ.id, option.id)}
+                          className="mt-1 h-4 w-4 accent-emerald-600"
+                        />
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Option
+                          </p>
+                          <p className="mt-1 text-base text-slate-800">{option.text}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div>
+                  <textarea
+                    value={descriptiveAnswers[currentQ.id] ?? ""}
+                    disabled={submitting}
+                    onChange={(e) => handleDescriptiveChange(currentQ.id, e.target.value)}
+                    placeholder="Write your answer clearly here..."
+                    className="min-h-[220px] w-full rounded-2xl border border-slate-300 bg-white px-4 py-4 text-base text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-900 focus:ring-1 focus:ring-slate-900 disabled:bg-slate-50"
+                  />
+                  <p className="mt-3 text-xs text-slate-500">
+                    Write concisely and keep your answer focused on the question prompt.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="px-6 py-8">
-            {error ? (
-              <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {error}
-              </div>
-            ) : null}
-
-            <p className="mb-8 whitespace-pre-wrap text-lg leading-8 text-slate-800">
-              {currentQ.question_text}
-            </p>
-
-            {currentQ.question_type === "objective" ? (
-              <div className="space-y-4">
-                {currentQ.options.map((option) => {
-                  const checked = (objectiveAnswers[currentQ.id] ?? []).includes(option.id);
-                  return (
-                    <label
-                      key={option.id}
-                      className={`flex cursor-pointer items-start gap-4 rounded-2xl border px-5 py-4 transition ${
-                        checked
-                          ? "border-emerald-300 bg-emerald-50"
-                          : "border-slate-200 bg-white hover:border-slate-300"
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name={`question-${currentQ.id}`}
-                        checked={checked}
-                        onChange={() => handleSelectObjective(currentQ.id, option.id)}
-                        className="mt-1 h-4 w-4"
-                      />
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Option
-                        </p>
-                        <p className="mt-1 text-base text-slate-800">{option.text}</p>
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            ) : (
-              <div>
-                <textarea
-                  value={descriptiveAnswers[currentQ.id] ?? ""}
-                  onChange={(e) => handleDescriptiveChange(currentQ.id, e.target.value)}
-                  placeholder="Write your answer here..."
-                  className="min-h-[220px] w-full rounded-2xl border border-slate-300 bg-white px-4 py-4 text-base text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-900"
-                />
-                <p className="mt-3 text-xs text-slate-500">
-                  Write clearly and keep your answer focused on the question.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-5">
+          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-5 bg-slate-50/50 rounded-b-2xl">
             <button
               onClick={() => goToQuestion(currentIndex - 1)}
-              disabled={currentIndex === 0}
-              className="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={currentIndex === 0 || submitting}
+              className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-xs transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
             >
-              Previous
+              ← Previous
             </button>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowLeaveModal(true)}
-                className="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700"
+                disabled={submitting}
+                className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-xs hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
               >
                 Pause / Exit
               </button>
               {currentIndex < questions.length - 1 ? (
                 <button
                   onClick={() => goToQuestion(currentIndex + 1)}
-                  className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white"
+                  disabled={submitting}
+                  className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
                 >
-                  Next
+                  Next →
                 </button>
               ) : (
                 <button
                   onClick={handleSubmitExam}
                   disabled={submitting}
-                  className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+                  className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:opacity-60"
                 >
                   {submitting ? "Submitting..." : "Submit Exam"}
                 </button>
@@ -686,24 +737,26 @@ export default function TakeExamPage() {
           </div>
         </main>
 
-        <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900">Question Palette</h3>
-          <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-              <div className="font-semibold text-slate-900">{answeredCount}</div>
-              <div className="text-xs text-slate-500">Answered</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-              <div className="font-semibold text-slate-900">{reviewCount}</div>
-              <div className="text-xs text-slate-500">Review</div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-              <div className="font-semibold text-slate-900">{pendingCount}</div>
-              <div className="text-xs text-slate-500">Pending</div>
+        <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-6">
+          <div>
+            <h3 className="text-xl font-semibold text-slate-900">Question Palette</h3>
+            <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+              <div className="rounded-xl border border-slate-200 bg-emerald-50/50 px-3 py-2 text-center">
+                <div className="font-bold text-emerald-800">{answeredCount}</div>
+                <div className="text-xs text-emerald-600">Answered</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-amber-50/50 px-3 py-2 text-center">
+                <div className="font-bold text-amber-800">{reviewCount}</div>
+                <div className="text-xs text-amber-600">Review</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                <div className="font-bold text-slate-800">{pendingCount}</div>
+                <div className="text-xs text-slate-500">Pending</div>
+              </div>
             </div>
           </div>
 
-          <div className="mt-6 grid max-h-[420px] grid-cols-5 gap-3 overflow-y-auto pr-1">
+          <div className="grid max-h-[380px] grid-cols-5 gap-2.5 overflow-y-auto pr-1">
             {questions.map((q, idx) => {
               const isCurrent = idx === currentIndex;
               const isAnswered =
@@ -713,15 +766,16 @@ export default function TakeExamPage() {
               const isFlagged = flaggedMap[q.id] ?? false;
 
               let buttonClass = "border-slate-200 bg-white text-slate-700 hover:border-slate-300";
-              if (isCurrent) buttonClass = "border-slate-900 bg-slate-900 text-white";
-              else if (isFlagged) buttonClass = "border-amber-300 bg-amber-50 text-amber-700";
-              else if (isAnswered) buttonClass = "border-emerald-300 bg-emerald-50 text-emerald-700";
+              if (isCurrent) buttonClass = "border-slate-900 bg-slate-900 text-white font-bold ring-2 ring-slate-900 ring-offset-1";
+              else if (isFlagged) buttonClass = "border-amber-300 bg-amber-50 text-amber-800 font-semibold";
+              else if (isAnswered) buttonClass = "border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold";
 
               return (
                 <button
                   key={q.id}
                   onClick={() => goToQuestion(idx)}
-                  className={`rounded-xl border px-0 py-3 text-sm font-medium transition ${buttonClass}`}
+                  disabled={submitting}
+                  className={`rounded-xl border py-2.5 text-sm font-medium transition focus:outline-none ${buttonClass}`}
                 >
                   {idx + 1}
                 </button>
@@ -729,15 +783,15 @@ export default function TakeExamPage() {
             })}
           </div>
 
-          <div className="mt-6 space-y-2 text-xs text-slate-500">
+          <div className="space-y-2 text-xs text-slate-500 border-t border-slate-100 pt-4">
             <p><span className="font-medium text-slate-700">Shortcuts:</span> Left / Right arrows to move.</p>
-            <p><span className="font-medium text-slate-700">Shortcut:</span> Press F to mark review.</p>
+            <p><span className="font-medium text-slate-700">Shortcut:</span> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono">F</kbd> to mark review.</p>
           </div>
 
           <button
             onClick={handleSubmitExam}
             disabled={submitting}
-            className="mt-6 w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+            className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:opacity-60"
           >
             {submitting ? "Submitting..." : "Submit Exam"}
           </button>
@@ -745,45 +799,46 @@ export default function TakeExamPage() {
       </div>
 
       {showLeaveModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-            <h3 className="text-xl font-semibold text-slate-900">Leave exam?</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-600">
-              You can pause and resume from History, submit now, or cancel this exam.
-              Cancelling removes all attempt details and keeps only exam metadata.
-            </p>
-            <div className="mt-6 grid gap-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 backdrop-blur-xs px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl space-y-6">
+            <div>
+              <h3 className="text-xl font-semibold text-slate-900">Leave exam workspace?</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                You can pause your progress and resume later from your History, submit your responses now, or cancel the attempt.
+              </p>
+            </div>
+            <div className="grid gap-3">
               <button
                 onClick={() => void handleLeaveAction("pause")}
                 disabled={submitting}
-                className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+                className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
               >
-                Pause Exam
+                ⏸ Pause Exam & Return to History
               </button>
               <button
                 onClick={() => void handleLeaveAction("submit")}
                 disabled={submitting}
-                className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white"
+                className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-500 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
               >
-                Submit Exam
+                ✓ Submit Exam Now
               </button>
               <button
                 onClick={() => void handleLeaveAction("cancel")}
                 disabled={submitting}
-                className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-medium text-white"
+                className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-rose-500 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-600"
               >
-                Cancel Exam
+                ✕ Cancel Attempt
               </button>
               <button
                 onClick={closeLeaveModal}
                 disabled={submitting}
-                className="rounded-xl px-4 py-3 text-sm font-medium text-slate-500"
+                className="rounded-xl px-4 py-3 text-sm font-medium text-slate-500 hover:bg-slate-100 transition focus:outline-none"
               >
                 Continue Exam
               </button>
             </div>
             {pendingBackNavigation ? (
-              <p className="mt-4 text-xs text-slate-400">
+              <p className="text-xs text-slate-400 text-center">
                 Back navigation was paused until you choose an action.
               </p>
             ) : null}
