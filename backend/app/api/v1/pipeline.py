@@ -9,10 +9,11 @@ from app.models.question import question_document
 from app.schemas.pipeline import PdfUploadResponse, PrepareExamResponse
 from app.services.storage_service import save_uploaded_pdf
 from app.rag.loaders.pdf_loader import extract_text_from_pdf
-from app.rag.generators.question_generator import (
+from app.services.question_generation_service import (
     generate_questions_from_content,
+    extract_existing_questions,
+    extract_questions_with_llm,
 )
-from app.rag.utils.parser import extract_existing_questions
 from app.services.exam_service import get_exam_or_404
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])

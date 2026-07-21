@@ -6,11 +6,12 @@ from typing import Literal
 from app.core.database import get_database
 from app.models.question import question_document
 from app.rag.loaders.pdf_loader import extract_text_from_pdf
-from app.rag.generators.question_generator import (
+from app.services.question_generation_service import (
     generate_questions_from_content,
+    extract_existing_questions,
     extract_questions_with_llm,
 )
-from app.rag.utils.parser import extract_existing_questions
+
 from app.services.question_generation_service import extract_existing_questions
 
 logger = logging.getLogger(__name__)
